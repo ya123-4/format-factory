@@ -36,6 +36,11 @@ def test_build_args_audio_bitrate():
         assert args[args.index("-c:a") + 1] == "libmp3lame"
 
 
+def test_build_args_ogg_uses_libopus():
+    args = build_media_args("a.flac", "b.ogg", _audio_meta(), "high", copy_ok=False)
+    assert args[args.index("-c:a") + 1] == "libopus"
+
+
 def test_build_args_gif_special():
     args = build_media_args("a.mp4", "b.gif", _video_meta(), "high", copy_ok=False)
     i = args.index("-vf")

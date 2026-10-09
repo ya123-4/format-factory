@@ -1,9 +1,10 @@
 """FFmpeg argument builder, copy-compatibility matrix, media engine (spec §4.3)."""
+import os
 import threading
 
 from app.config import Config
 from app.engine.errors import InputCorrupt
-from app.engine.media_prober import FfprobeMediaProber, MediaMeta
+from app.engine.media_prober import FfmpegTextProber, FfprobeMediaProber, MediaMeta
 
 FORMAT_MAP = {
     "video": ["mp4", "mkv", "avi", "mov", "webm", "gif"],
@@ -37,7 +38,7 @@ _AUDIO_ENCODER = {
     "mp3": "libmp3lame",
     "m4a": "aac",
     "aac": "aac",
-    "ogg": "libvorbis",
+    "ogg": "libopus",
 }
 
 
@@ -94,7 +95,7 @@ class MediaEngine:
         run=None,
     ):
         self._ffmpeg = ffmpeg_path
-        self._prober = prober or FfprobeMediaProber(ffprobe_path)
+        self._prober = prober or _default_prober(ffprobe_path, ffmpeg_path)
         self._config = config
         self._stop = stop_event
         self._run = run or _default_run
@@ -120,6 +121,12 @@ class MediaEngine:
         args = build_media_args(job.src_path, job.final_path, meta, quality, copy_ok)
         self._run([self._ffmpeg] + args, job.final_path, self._stop)
         return note
+
+
+def _default_prober(ffprobe_path: str, ffmpeg_path: str):
+    if ffprobe_path and os.path.exists(ffprobe_path):
+        return FfprobeMediaProber(ffprobe_path)
+    return FfmpegTextProber(ffmpeg_path)
 
 
 def _default_run(cmd, dst, stop_event):

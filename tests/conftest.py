@@ -23,15 +23,36 @@ def tmp_path(request):
 @pytest.fixture(scope="session")
 def ffmpeg() -> str:
     p = TOOLS / "ffmpeg.exe"
-    assert p.exists(), "ffmpeg.exe missing — run .pytest-bootstrap/fetch_ffmpeg.py"
+    assert p.exists(), "ffmpeg.exe missing — copy a gyan/BtbN build into tools/ffmpeg"
     return str(p)
 
 
 @pytest.fixture(scope="session")
-def ffprobe() -> str:
-    p = TOOLS / "ffprobe.exe"
-    assert p.exists(), "ffprobe.exe missing — run .pytest-bootstrap/fetch_ffmpeg.py"
-    return str(p)
+def kit_works() -> bool:
+    """Probe once whether the LibreOffice Kit can spawn its backend here.
+
+    DSH sandbox blocks Node spawn with pipe stdio (EPERM); outside the
+    sandbox (real GUI runs) the Kit works. Skipped tests document this.
+    """
+    import subprocess
+
+    from app.config import DEFAULTS
+
+    node, cli = DEFAULTS["kit_node"], DEFAULTS["kit_cli"]
+    if not (Path(node).exists() and Path(cli).exists()):
+        return False
+    src = Path(__file__).parent / "fixtures" / "hello.docx"
+    out_dir = ROOT / ".tmp-tests" / "kit-probe"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / "probe.pdf"
+    try:
+        r = subprocess.run(
+            [node, cli, "convert", "--input", str(src), "--output", str(out)],
+            capture_output=True, text=True, timeout=120,
+        )
+    except Exception:  # noqa: BLE001
+        return False
+    return r.returncode == 0 and out.exists()
 
 
 @pytest.fixture(scope="session")

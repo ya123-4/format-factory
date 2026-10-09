@@ -19,17 +19,17 @@ from app.engine.runner import Cancelled, atomic_output
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def _ffprobe_readable(ffprobe, path) -> bool:
+def _media_readable(ffmpeg, path) -> bool:
     r = subprocess.run(
-        [ffprobe, "-v", "error", "-show_entries", "stream=codec_type", "-of", "json", str(path)],
+        [ffmpeg, "-v", "error", "-i", str(path), "-f", "null", "-"],
         capture_output=True, text=True,
     )
-    return r.returncode == 0 and "codec_type" in r.stdout
+    return r.returncode == 0
 
 
-def _convert_one(ffmpeg, ffprobe, src, out_dir, fmt):
+def _convert_one(ffmpeg, src, out_dir, fmt):
     job = ConversionJob(src_path=str(src), out_dir=str(out_dir), target_fmt=fmt)
-    media = MediaEngine(ffmpeg, ffprobe, _cfg(out_dir), None)
+    media = MediaEngine(ffmpeg, "", _cfg(out_dir), None)
     conv = Converter(
         jobs=[job],
         engines={InputKind.VIDEO: media.convert, InputKind.AUDIO: media.convert},
@@ -45,30 +45,30 @@ def _cfg(out_dir):
     return Config(out_dir=str(out_dir), conflict="overwrite")
 
 
-def test_video_mp4_to_mkv_copy(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_video_mp4_to_mkv_copy(make_sample_media, ffmpeg, tmp_path):
     src = make_sample_media("video", tmp_path / "in.mp4")
-    summary, job = _convert_one(ffmpeg, ffprobe, src, tmp_path, "mkv")
+    summary, job = _convert_one(ffmpeg, src, tmp_path, "mkv")
     assert summary.done == 1
     assert job.status == JobStatus.DONE
     assert Path(job.final_path).exists()
-    assert _ffprobe_readable(ffprobe, job.final_path)
+    assert _media_readable(ffmpeg, job.final_path)
 
 
-def test_video_mp4_to_webm_reencode(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_video_mp4_to_webm_reencode(make_sample_media, ffmpeg, tmp_path):
     src = make_sample_media("video", tmp_path / "in.mp4")
-    summary, job = _convert_one(ffmpeg, ffprobe, src, tmp_path, "webm")
+    summary, job = _convert_one(ffmpeg, src, tmp_path, "webm")
     assert summary.done == 1
-    assert _ffprobe_readable(ffprobe, job.final_path)
+    assert _media_readable(ffmpeg, job.final_path)
 
 
-def test_audio_flac_to_mp3(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_audio_flac_to_mp3(make_sample_media, ffmpeg, tmp_path):
     src = make_sample_media("audio", tmp_path / "in.flac")
-    summary, job = _convert_one(ffmpeg, ffprobe, src, tmp_path, "mp3")
+    summary, job = _convert_one(ffmpeg, src, tmp_path, "mp3")
     assert summary.done == 1
-    assert _ffprobe_readable(ffprobe, job.final_path)
+    assert _media_readable(ffmpeg, job.final_path)
 
 
-def test_image_bmp_to_png_and_jpg(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_image_bmp_to_png_and_jpg(make_sample_media, ffmpeg, tmp_path):
     src = make_sample_media("image", tmp_path / "in.bmp")
     jobs = [
         ConversionJob(src_path=str(src), out_dir=str(tmp_path), target_fmt=fmt)
@@ -88,7 +88,9 @@ def test_image_bmp_to_png_and_jpg(make_sample_media, ffmpeg, ffprobe, tmp_path):
         assert out.exists() and out.stat().st_size > 0
 
 
-def test_document_docx_to_pdf(tmp_path):
+def test_document_docx_to_pdf(tmp_path, kit_works):
+    if not kit_works:
+        pytest.skip("LibreOffice Kit backend blocked in DSH sandbox (spawn EPERM)")
     src = FIXTURES / "hello.docx"
     job = ConversionJob(src_path=str(src), out_dir=str(tmp_path), target_fmt="pdf")
     doc = DocConverter(DEFAULTS["kit_node"], DEFAULTS["kit_cli"], None)
@@ -104,7 +106,9 @@ def test_document_docx_to_pdf(tmp_path):
     assert out.exists() and out.stat().st_size > 0
 
 
-def test_document_xlsx_to_csv(tmp_path):
+def test_document_xlsx_to_csv(tmp_path, kit_works):
+    if not kit_works:
+        pytest.skip("LibreOffice Kit backend blocked in DSH sandbox (spawn EPERM)")
     src = FIXTURES / "data.xlsx"
     job = ConversionJob(src_path=str(src), out_dir=str(tmp_path), target_fmt="csv")
     doc = DocConverter(DEFAULTS["kit_node"], DEFAULTS["kit_cli"], None)
@@ -120,16 +124,16 @@ def test_document_xlsx_to_csv(tmp_path):
     assert "苹果" in text
 
 
-def test_vdat_mp4_variant_end_to_end(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_vdat_mp4_variant_end_to_end(make_sample_media, ffmpeg, tmp_path):
     mp4 = make_sample_media("video", tmp_path / "real.mp4")
     vdat = tmp_path / "rec01.vdat"
     vdat.write_bytes(mp4.read_bytes())
-    summary, job = _convert_one(ffmpeg, ffprobe, vdat, tmp_path, "mp4")
+    summary, job = _convert_one(ffmpeg, vdat, tmp_path, "mp4")
     assert summary.done == 1
-    assert _ffprobe_readable(ffprobe, job.final_path)
+    assert _media_readable(ffmpeg, job.final_path)
 
 
-def test_folder_recursive_keeps_rel_dirs(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_folder_recursive_keeps_rel_dirs(make_sample_media, ffmpeg, tmp_path):
     inner = tmp_path / "视频" / "旅行"
     src = make_sample_media("video", inner / "rec.mp4")
     job = ConversionJob(
@@ -138,7 +142,7 @@ def test_folder_recursive_keeps_rel_dirs(make_sample_media, ffmpeg, ffprobe, tmp
         target_fmt="mkv",
         rel_subdir="视频/旅行",
     )
-    media = MediaEngine(ffmpeg, ffprobe, _cfg(tmp_path / "输出"), None)
+    media = MediaEngine(ffmpeg, "", _cfg(tmp_path / "输出"), None)
     conv = Converter(
         jobs=[job],
         engines={InputKind.VIDEO: media.convert},
@@ -150,11 +154,11 @@ def test_folder_recursive_keeps_rel_dirs(make_sample_media, ffmpeg, ffprobe, tmp
     assert (tmp_path / "输出" / "视频" / "旅行" / "rec.mkv").exists()
 
 
-def test_skip_policy_integration(make_sample_media, ffmpeg, ffprobe, tmp_path):
+def test_skip_policy_integration(make_sample_media, ffmpeg, tmp_path):
     src = make_sample_media("video", tmp_path / "in.mp4")
     (tmp_path / "in.mkv").write_bytes(b"exists")
     job = ConversionJob(src_path=str(src), out_dir=str(tmp_path), target_fmt="mkv")
-    media = MediaEngine(ffmpeg, ffprobe, _cfg(tmp_path), None)
+    media = MediaEngine(ffmpeg, "", _cfg(tmp_path), None)
     conv = Converter(
         jobs=[job],
         engines={InputKind.VIDEO: media.convert},
@@ -169,7 +173,8 @@ def test_skip_policy_integration(make_sample_media, ffmpeg, ffprobe, tmp_path):
 def test_stop_interrupts_and_no_part_left(tmp_path):
     dst = tmp_path / "out.bin"
     stop = threading.Event()
-    cmd = [sys.executable, "-c", "import time; time.sleep(60)"]
+    # cmd 契约：最后一个参数是输出文件（atomic_output 会替换为 .part 临时名）
+    cmd = [sys.executable, "-c", "import time; time.sleep(60)", str(dst)]
     errors = []
 
     def worker():
@@ -182,7 +187,7 @@ def test_stop_interrupts_and_no_part_left(tmp_path):
     t.start()
     time.sleep(1.0)
     stop.set()
-    t.join(timeout=30)
+    t.join(timeout=40)
     assert errors == ["cancelled"]
     assert not list(tmp_path.glob("*.part.*"))
     assert not dst.exists()

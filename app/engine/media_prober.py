@@ -1,9 +1,10 @@
-"""Injectable media prober: pure JSON parsing + ffprobe-backed implementation.
+"""Injectable media prober: pure parsing + ffprobe/ffmpeg-text implementations.
 
-Tests inject a fake; the FfprobeMediaProber itself is covered by
+Tests inject a fake; the real implementations are covered by
 integration tests (Task 16).
 """
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from typing import Protocol
@@ -67,4 +68,48 @@ class FfprobeMediaProber:
         meta = parse_ffprobe_json(r.stdout)
         if meta is None:
             raise InputCorrupt(f"ffprobe could not read streams from {path}")
+        return meta
+
+
+_VIDEO_RE = re.compile(r"Stream #\d+:\d+[^\n]*?Video: (\w+)")
+_AUDIO_RE = re.compile(r"Stream #\d+:\d+[^\n]*?Audio: (\w+)")
+
+
+def parse_ffmpeg_text(stderr: str) -> MediaMeta | None:
+    """Parse `ffmpeg -hide_banner -i <file>` stderr into MediaMeta (no ffprobe needed)."""
+    if not stderr or "Invalid data" in stderr:
+        return None
+    video = _VIDEO_RE.search(stderr)
+    audio = _AUDIO_RE.search(stderr)
+    if video is not None:
+        return MediaMeta(
+            kind="video",
+            codec=video.group(1).lower(),
+            container="",
+            has_audio=audio is not None,
+        )
+    if audio is not None:
+        return MediaMeta(
+            kind="audio", codec=audio.group(1).lower(), container="", has_audio=True
+        )
+    return None
+
+
+class FfmpegTextProber:
+    """MediaProber backed by `ffmpeg -i` stderr parsing (fallback when ffprobe is absent)."""
+
+    def __init__(self, ffmpeg_path: str):
+        self._ffmpeg = ffmpeg_path
+
+    def probe(self, path: str) -> MediaMeta:
+        r = subprocess.run(
+            [self._ffmpeg, "-hide_banner", "-i", path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        meta = parse_ffmpeg_text(r.stderr or "")
+        if meta is None:
+            raise InputCorrupt(f"ffmpeg could not read streams from {path}")
         return meta

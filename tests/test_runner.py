@@ -112,3 +112,18 @@ def test_atomic_output_moves_part_to_dst(tmp_path, monkeypatch):
     runner.atomic_output(["ff.exe", "-i", "a", str(dst)], str(dst), None)
     assert dst.read_text() == "done"
     assert not list(tmp_path.glob("*.part.*"))
+
+
+def test_atomic_output_part_keeps_extension(tmp_path, monkeypatch):
+    dst = tmp_path / "out.mkv"
+    calls = []
+
+    def fake_run_tool(cmd, cwd, stop_event=None):
+        calls.append(cmd)
+        open(cmd[-1], "w").write("done")
+
+    monkeypatch.setattr(runner, "run_tool", fake_run_tool)
+    runner.atomic_output(["ff.exe", "-i", "a", str(dst)], str(dst), None)
+    part = calls[0][-1]
+    assert part.endswith(".mkv"), f"part must keep extension for muxer detection: {part}"
+    assert ".part." in part

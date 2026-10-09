@@ -1,7 +1,13 @@
 """MediaProber interface tests (Task 6) — fake injection, no external tools."""
 import json
 
-from app.engine.media_prober import FfprobeMediaProber, MediaMeta, parse_ffprobe_json
+from app.engine.media_prober import (
+    FfprobeMediaProber,
+    FfmpegTextProber,
+    MediaMeta,
+    parse_ffmpeg_text,
+    parse_ffprobe_json,
+)
 
 
 class FakeProber:
@@ -61,3 +67,37 @@ def test_parse_ffprobe_json_audio_only():
 def test_parse_ffprobe_json_empty_streams():
     assert parse_ffprobe_json(json.dumps({"streams": []})) is None
     assert parse_ffprobe_json("not json") is None
+
+
+FFMPEG_STDERR_SAMPLE = """\
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'x.mp4':
+  Duration: 00:00:02.00, start: 0.000000, bitrate: 98 kb/s
+  Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 128x72
+  Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono
+At least one output file must be specified
+"""
+
+FFMPEG_AUDIO_ONLY = """\
+Input #0, flac, from 'x.flac':
+  Stream #0:0: Audio: flac, 44100 Hz, mono
+At least one output file must be specified
+"""
+
+
+def test_parse_ffmpeg_text_extracts_codecs():
+    meta = parse_ffmpeg_text(FFMPEG_STDERR_SAMPLE)
+    assert meta.kind == "video"
+    assert meta.codec == "h264"
+    assert meta.has_audio is True
+
+
+def test_parse_ffmpeg_text_audio_only():
+    meta = parse_ffmpeg_text(FFMPEG_AUDIO_ONLY)
+    assert meta.kind == "audio"
+    assert meta.codec == "flac"
+    assert meta.has_audio is True
+
+
+def test_parse_ffmpeg_text_invalid():
+    assert parse_ffmpeg_text("Invalid data found when processing input") is None
+    assert parse_ffmpeg_text("") is None

@@ -11,3 +11,4 @@ tools/
 .appdata-test/
 debug.log
 pytest-cache-files*/
+.tmp-kit-test/
