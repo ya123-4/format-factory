@@ -39,6 +39,13 @@ def _soffice_bin(config: Config) -> str:
     return ""
 
 
+def _kit_paths(config: Config):
+    node, cli = config.kit_node, config.kit_cli
+    if node and cli and os.path.exists(node) and os.path.exists(cli):
+        return node, cli
+    return "", ""
+
+
 class MainWindow:
     def __init__(self, root: tk.Tk, config: Config):
         self.root = root
@@ -182,11 +189,11 @@ class MainWindow:
         stop = threading.Event()
         self._stop_event = stop
         ffmpeg = _ffmpeg_bin()
-        soffice = _soffice_bin(self.config)
+        node, cli = _kit_paths(self.config)
         profile_dir = app_data_dir() / "soffice-profile"
         media = MediaEngine(ffmpeg, _ffprobe_bin(), self.config, stop)
         image = ImageConverter(ffmpeg, stop, self.config.image_quality)
-        doc = DocConverter(soffice, str(profile_dir), stop)
+        doc = DocConverter(node, cli, stop)
         engines = {
             InputKind.VIDEO: media.convert,
             InputKind.AUDIO: media.convert,
@@ -249,6 +256,6 @@ class MainWindow:
         missing = []
         if "ffmpeg" in needed and not _ffmpeg_bin():
             missing.append("FFmpeg（tools/ffmpeg/ffmpeg.exe）")
-        if "soffice" in needed and not _soffice_bin(self.config):
-            missing.append("LibreOffice（请在配置中设置 soffice 路径）")
+        if "soffice" in needed and not (_kit_paths(self.config)[0] or _soffice_bin(self.config)):
+            missing.append("LibreOffice Kit（config.json 的 kit_node/kit_cli 路径不可用）")
         return missing

@@ -42,6 +42,12 @@ def test_build_args_gif_special():
     assert args[i + 1] == "fps=10,scale=320:-1"
 
 
+def test_build_args_webm_uses_vp9():
+    args = build_media_args("a.mp4", "b.webm", _video_meta(), "high", copy_ok=False)
+    i = args.index("-c:v")
+    assert args[i + 1] == "libvpx-vp9"
+
+
 def test_matrix_known_compatible():
     assert copy_compatible(_video_meta("h264"), "mkv") is True
     assert copy_compatible(_audio_meta("aac"), "mp4") is True

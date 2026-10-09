@@ -63,6 +63,10 @@ def build_media_args(
     if tgt in VIDEO_FORMATS:
         if tgt == "gif":
             return args + ["-vf", "fps=10,scale=320:-1", dst]
+        if tgt == "webm":
+            args += ["-c:v", "libvpx-vp9", "-crf", CRF[quality]]
+            args += ["-c:a", "libopus", "-b:a", AUDIO_BITRATE[quality]]
+            return args + [dst]
         args += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", CRF[quality]]
         args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE[quality]]
         return args + [dst]

@@ -10,6 +10,8 @@ DEFAULTS = {
     "media_quality": "high",
     "image_quality": "high",
     "soffice_path": "",
+    "kit_node": r"C:\Users\ybc12\AppData\Local\Programs\DeepSeek Harness\resources\runtime\primary-runtime\dependencies\node\bin\node.exe",
+    "kit_cli": r"C:\Users\ybc12\AppData\Local\Programs\DeepSeek Harness\resources\app.asar.unpacked\dsh\node_modules\@deepseek-ai\libreoffice-kit\lib\cli.js",
 }
 
 
@@ -29,6 +31,8 @@ class Config:
     media_quality: str = "high"
     image_quality: str = "high"
     soffice_path: str = ""
+    kit_node: str = ""
+    kit_cli: str = ""
 
     @classmethod
     def load(cls) -> "Config":
@@ -36,12 +40,12 @@ class Config:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            cfg = cls()
+            cfg = cls(**DEFAULTS)
             cfg.save()
             return cfg
         known = {f.name for f in fields(cls)}
-        cfg = cls(**{k: v for k, v in data.items() if k in known})
-        return cfg
+        merged = {**DEFAULTS, **{k: v for k, v in data.items() if k in known}}
+        return cls(**merged)
 
     def save(self) -> None:
         path = config_path()

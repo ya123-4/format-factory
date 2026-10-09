@@ -26,7 +26,7 @@ KIND_TEXT = {
     InputKind.UNKNOWN: "未知",
 }
 
-DOC_TARGETS = ["pdf", "docx", "odt", "txt", "xlsx", "pptx"]
+DOC_TARGETS = ["pdf", "docx", "odt", "txt", "xlsx", "csv", "pptx"]
 
 
 def targets_for(path: str) -> list[str]:

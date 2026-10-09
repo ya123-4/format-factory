@@ -17,6 +17,7 @@ def test_load_missing_returns_defaults_and_writes(tmp_path, monkeypatch):
     assert c.image_quality == "high"
     assert c.out_dir == ""
     assert c.soffice_path == ""
+    assert c.kit_node != "" and c.kit_cli != ""
     assert (tmp_path / "FormatFactory" / "config.json").exists()
 
 
