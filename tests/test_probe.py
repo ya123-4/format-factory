@@ -33,6 +33,12 @@ def test_detect_vdat_mp4_variant(tmp_path):
     assert detect_vdat_magic(str(p)) == VdatKind.MP4_VARIANT
 
 
+def test_detect_vdat_hls_playlist(tmp_path):
+    p = tmp_path / "rec.vdat"
+    p.write_bytes(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nrec.vdat_contents/0\n")
+    assert detect_vdat_magic(str(p)) == VdatKind.HLS_PLAYLIST
+
+
 def test_detect_vdat_unknown(tmp_path):
     p = tmp_path / "rec.vdat"
     p.write_bytes(b"\x12\x34\x56\x78" + b"\x99" * 60)

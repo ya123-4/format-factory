@@ -16,6 +16,11 @@ def route_vdat(path: str, prober=None) -> InputKind:
     kind = detect_vdat_magic(path)
     if kind == VdatKind.MP4_VARIANT:
         return InputKind.VIDEO
+    if kind == VdatKind.HLS_PLAYLIST:
+        # HLS playlist: ffmpeg reads it directly; segments must be present
+        # in <name>.vdat_contents/ beside the playlist (missing segments
+        # surface as ffmpeg errors on conversion).
+        return InputKind.VIDEO
     with open(path, "rb") as f:
         head = f.read(HEADER_HEX_BYTES)
     digest = binascii.hexlify(head).decode("ascii")

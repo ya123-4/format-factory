@@ -15,6 +15,7 @@ DOC_EXTS = {"pdf", "docx", "xlsx", "pptx", "odt", "txt"}
 
 class VdatKind(Enum):
     MP4_VARIANT = "mp4_variant"
+    HLS_PLAYLIST = "hls_playlist"
     OTHER = "other"
     UNKNOWN = "unknown"
 
@@ -37,4 +38,8 @@ def detect_vdat_magic(path: str) -> VdatKind:
         head = f.read(64)
     if len(head) >= 8 and head[4:8] == b"ftyp":
         return VdatKind.MP4_VARIANT
+    if head.startswith(b"#EXTM3U"):
+        # cosblaster-style: .vdat is an HLS playlist; segments live in
+        # <name>.vdat_contents/ next to it.
+        return VdatKind.HLS_PLAYLIST
     return VdatKind.UNKNOWN

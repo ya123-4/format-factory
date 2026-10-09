@@ -133,6 +133,48 @@ def test_vdat_mp4_variant_end_to_end(make_sample_media, ffmpeg, tmp_path):
     assert _media_readable(ffmpeg, job.final_path)
 
 
+def test_vdat_hls_playlist_end_to_end(make_sample_media, ffmpeg, tmp_path):
+    # 模拟 cosblaster 布局：.vdat 是 M3U8 清单，分片在 <name>.vdat_contents/
+    src = make_sample_media("video", tmp_path / "src.mp4")
+    segdir = tmp_path / "play.vdat_contents"
+    segdir.mkdir()
+    r = subprocess.run(
+        [ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+         "-i", str(src), "-c", "copy",
+         "-hls_time", "1", "-hls_list_size", "0",
+         "-hls_segment_filename", str(segdir / "seg%d.ts"),
+         str(tmp_path / "play.m3u8")],
+        capture_output=True, text=True,
+    )
+    assert r.returncode == 0, r.stderr
+    # ffmpeg 生成的清单段引用是裸文件名；改写为 cosblaster 风格（相对清单的子目录引用）
+    m3u8 = tmp_path / "play.m3u8"
+    m3u8.write_text(
+        m3u8.read_text(encoding="utf-8").replace(
+            "seg0.ts", "play.vdat_contents/seg0.ts"
+        ),
+        encoding="utf-8",
+    )
+    vdat = tmp_path / "play.vdat"
+    m3u8.replace(vdat)
+    summary, job = _convert_one(ffmpeg, vdat, tmp_path, "mp4")
+    assert summary.done == 1
+    assert _media_readable(ffmpeg, job.final_path)
+
+
+def test_vdat_hls_missing_segments_fails_cleanly(make_sample_media, ffmpeg, tmp_path):
+    # 只有清单没有分片：应 FAILED（InputCorrupt/ConversionFailed），不崩溃
+    vdat = tmp_path / "play.vdat"
+    vdat.write_text(
+        "#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nplay.vdat_contents/seg0.ts\n",
+        encoding="utf-8",
+    )
+    summary, job = _convert_one(ffmpeg, vdat, tmp_path, "mp4")
+    assert summary.failed == 1
+    assert job.status == JobStatus.FAILED
+    assert job.error
+
+
 def test_folder_recursive_keeps_rel_dirs(make_sample_media, ffmpeg, tmp_path):
     inner = tmp_path / "视频" / "旅行"
     src = make_sample_media("video", inner / "rec.mp4")
