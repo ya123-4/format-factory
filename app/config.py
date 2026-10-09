@@ -14,6 +14,8 @@ DEFAULTS = {
     "kit_cli": r"C:\Users\ybc12\AppData\Local\Programs\DeepSeek Harness\resources\app.asar.unpacked\dsh\node_modules\@deepseek-ai\libreoffice-kit\lib\cli.js",
 }
 
+VALID_CONFLICT = {"rename", "overwrite", "skip"}
+
 
 def app_data_dir() -> Path:
     base = os.environ.get("APPDATA") or str(Path.home())
@@ -45,6 +47,8 @@ class Config:
             return cfg
         known = {f.name for f in fields(cls)}
         merged = {**DEFAULTS, **{k: v for k, v in data.items() if k in known}}
+        if merged["conflict"] not in VALID_CONFLICT:
+            merged["conflict"] = DEFAULTS["conflict"]
         return cls(**merged)
 
     def save(self) -> None:

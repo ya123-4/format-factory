@@ -21,6 +21,19 @@ FFMPEG_DIR = PROJECT_ROOT / "tools" / "ffmpeg"
 
 MEDIA_QUALITY_MAP = {"同源无损": "copy", "高质量": "high", "中等": "medium", "低质量": "low"}
 IMAGE_QUALITY_MAP = {"高质量": "high", "中等": "medium", "低": "low"}
+CONFLICT_MAP = {"自动重命名": "rename", "覆盖": "overwrite", "跳过": "skip"}
+
+
+def effective_output(job, config: Config):
+    """Resolve (out_dir, rel_subdir) for a job.
+
+    With a configured output dir: keep the relative subdir (recursive layout).
+    Without one: output beside the source, drop the subdir — keeping it would
+    duplicate the folder hierarchy inside the source tree.
+    """
+    if config.out_dir:
+        return config.out_dir, job.rel_subdir
+    return os.path.dirname(job.src_path), ""
 
 
 def _ffmpeg_bin() -> str:
@@ -176,7 +189,7 @@ class MainWindow:
             return
         out_dir = self.config.out_dir or ""
         for j in jobs:
-            j.out_dir = out_dir or os.path.dirname(j.src_path)
+            j.out_dir, j.rel_subdir = effective_output(j, self.config)
             j.final_path = None
         missing = self._check_tools(jobs)
         if missing:
@@ -184,6 +197,7 @@ class MainWindow:
             return
         self.config.media_quality = MEDIA_QUALITY_MAP[self.progress.media_quality.get()]
         self.config.image_quality = IMAGE_QUALITY_MAP[self.progress.image_quality.get()]
+        self.config.conflict = CONFLICT_MAP[self.progress.conflict_combo.get()]
         self.config.save()
 
         stop = threading.Event()
@@ -217,7 +231,15 @@ class MainWindow:
         self.root.after(100, self._poll)
 
     def _run_worker(self, conv: Converter) -> None:
-        summary = conv.run()
+        try:
+            summary = conv.run()
+        except Exception:  # noqa: BLE001 — 任何未预期异常都不能让 GUI 静默卡死
+            import traceback
+
+            tb = traceback.format_exc()
+            self.logger.error(tb)
+            self._queue.put(("error", tb))
+            return
         self._queue.put(("summary", summary))
 
     def _poll(self) -> None:
@@ -241,6 +263,15 @@ class MainWindow:
                     f"成功 {s.done} / 失败 {s.failed} / 跳过 {s.skipped} / 已取消 {s.cancelled}",
                 )
                 return
+            elif msg[0] == "error":
+                tb = msg[1]
+                self.progress.append_log("[错误] 转换线程异常终止，详见日志文件：")
+                self.progress.append_log(tb.splitlines()[-1] if tb.splitlines() else tb)
+                self.progress.set_running(False)
+                for j in self.file_list.jobs():
+                    self.file_list.update_status(j)
+                messagebox.showerror("转换出错", "转换线程异常终止，详情已写入日志文件。")
+                return
         if self._worker is not None and self._worker.is_alive():
             self.root.after(100, self._poll)
         else:
@@ -256,6 +287,6 @@ class MainWindow:
         missing = []
         if "ffmpeg" in needed and not _ffmpeg_bin():
             missing.append("FFmpeg（tools/ffmpeg/ffmpeg.exe）")
-        if "soffice" in needed and not (_kit_paths(self.config)[0] or _soffice_bin(self.config)):
+        if "soffice" in needed and not _kit_paths(self.config)[0]:
             missing.append("LibreOffice Kit（config.json 的 kit_node/kit_cli 路径不可用）")
         return missing

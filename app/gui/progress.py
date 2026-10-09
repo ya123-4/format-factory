@@ -24,6 +24,12 @@ class ProgressFrame(ttk.Frame):
         )
         self.image_quality.set("高质量")
         self.image_quality.pack(side="left", padx=(0, 12))
+        ttk.Label(row, text="冲突:").pack(side="left")
+        self.conflict_combo = ttk.Combobox(
+            row, state="readonly", width=10, values=["自动重命名", "覆盖", "跳过"]
+        )
+        self.conflict_combo.set("自动重命名")
+        self.conflict_combo.pack(side="left", padx=(0, 12))
 
         self.start_button = ttk.Button(row, text="开始转换", command=on_start)
         self.start_button.pack(side="left", padx=4)

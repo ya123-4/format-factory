@@ -44,3 +44,12 @@ def test_save_roundtrip(tmp_path, monkeypatch):
     # 文件是合法 JSON 且为 UTF-8
     text = (tmp_path / "FormatFactory" / "config.json").read_text(encoding="utf-8")
     assert json.loads(text)["conflict"] == "skip"
+
+
+def test_load_invalid_conflict_falls_back_to_rename(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    d = tmp_path / "FormatFactory"
+    d.mkdir(parents=True)
+    (d / "config.json").write_text('{"conflict": "foo"}', encoding="utf-8")
+    c = cfg.Config.load()
+    assert c.conflict == "rename"  # 非法值回退默认，避免运行时 ValueError
