@@ -15,17 +15,19 @@ Windows 桌面多格式转换器：视频 / 音频 / 图片 / 文档互转，支
 | 图片 | jpg / png / webp / bmp / tiff |
 | 文档 | pdf / docx / odt / txt / xlsx / csv / pptx（按矩阵过滤，见下） |
 
-**文档转换矩阵**（LibreOffice Kit 实测能力）：
+**文档转换矩阵**（rev 4：Office 格式走 LibreOffice Kit，PDF 源走进程内 PyMuPDF/pdf2docx 引擎）：
 
 | 源 ↓ \ 目标 → | pdf | docx | odt | txt | xlsx | csv | pptx |
 |---|---|---|---|---|---|---|---|
+| pdf | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ |
 | docx | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | odt | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | xlsx | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ |
 | pptx | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
 
 - `xlsx → csv` 即原设计的 CSV 导出语义（逗号分隔文本）。
-- `txt`、`pdf` 文件作为转换**源**暂不支持（本机 LibreOffice Kit 无此输入能力）；安装传统 LibreOffice 后可在 `config.json` 的 `soffice_path` 配置扩展。
+- `pdf → docx` 为文本流还原（逐段提取原文，Word/WPS 可打开编辑；复杂表格/版式不重建），`pdf → txt` 为纯文本提取。两者不需要任何外部工具。
+- `txt` 文件作为转换**源**暂不支持（本机 LibreOffice Kit 无此输入能力）；安装传统 LibreOffice 后可在 `config.json` 的 `soffice_path` 配置扩展。
 - `.vdat`：自动探测文件头，支持两类：
   1. **MP4 变体**（行车记录仪常见）：直接按视频转换，目标格式建议 mp4；
   2. **HLS 播放列表**（cosblaster 类工具）：`.vdat` 本体是 M3U8 清单，**分片必须位于同目录的 `<文件名>.vdat_contents\` 文件夹**内（清单缺失分片时该文件会报错并标红，其余文件不受影响）。

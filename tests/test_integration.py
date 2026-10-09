@@ -238,3 +238,56 @@ def test_stop_interrupts_and_no_part_left(tmp_path):
 def test_required_tools_doc_only():
     job = ConversionJob(src_path="a.docx", out_dir="out", target_fmt="pdf")
     assert required_tools([job]) == {"soffice"}
+    # PDF 源走进程内引擎，不要求 soffice
+    job2 = ConversionJob(src_path="a.pdf", out_dir="out", target_fmt="docx")
+    assert required_tools([job2]) == set()
+
+
+def _make_pdf(tmp_path):
+    import fitz  # PyMuPDF
+
+    out = tmp_path / "in.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "FormatFactory PDF test line")
+    page2 = doc.new_page()
+    page2.insert_text((72, 72), "second page content")
+    doc.save(str(out))
+    doc.close()
+    return out
+
+
+def _convert_doc(src, tmp_path, fmt):
+    job = ConversionJob(src_path=str(src), out_dir=str(tmp_path), target_fmt=fmt)
+    doc = DocConverter("", "", None)  # PDF 路径不需要 Kit
+    conv = Converter(
+        jobs=[job],
+        engines={InputKind.DOCUMENT: doc.convert},
+        prober=None,
+        config=Config(out_dir=str(tmp_path), conflict="overwrite"),
+    )
+    return conv.run(), job
+
+
+def test_document_pdf_to_docx(tmp_path):
+    src = _make_pdf(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "docx")
+    assert summary.done == 1
+    out = Path(job.final_path)
+    assert out.exists() and out.stat().st_size > 1000
+    import zipfile
+
+    assert zipfile.is_zipfile(out)
+    with zipfile.ZipFile(out) as z:
+        document_xml = z.read("word/document.xml").decode("utf-8")
+    assert "FormatFactory" in document_xml
+    assert "second page" in document_xml
+
+
+def test_document_pdf_to_txt(tmp_path):
+    src = _make_pdf(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "txt")
+    assert summary.done == 1
+    text = Path(job.final_path).read_text(encoding="utf-8")
+    assert "FormatFactory" in text
+    assert "second page" in text

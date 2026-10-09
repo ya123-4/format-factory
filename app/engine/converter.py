@@ -33,7 +33,9 @@ def required_tools(jobs: list[ConversionJob]) -> set[str]:
     for job in jobs:
         kind = classify_extension(job.src_path)
         if kind == InputKind.DOCUMENT:
-            tools.add("soffice")
+            # PDF 源走进程内引擎（PyMuPDF/pdf2docx），不依赖外部工具
+            if not job.src_path.lower().endswith(".pdf"):
+                tools.add("soffice")
         else:
             tools.add("ffmpeg")  # VIDEO/AUDIO/IMAGE/UNKNOWN 均需 ffmpeg
     return tools

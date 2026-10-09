@@ -17,13 +17,17 @@ def test_doc_matrix_supported():
     assert doc_supported("xlsx", "csv") is True
     assert doc_supported("xlsx", "pdf") is True
     assert doc_supported("pptx", "pdf") is True
+    # PDF 源（PyMuPDF/pdf2docx 引擎）
+    assert doc_supported("pdf", "docx") is True
+    assert doc_supported("pdf", "txt") is True
     # 矩阵外（Kit 实测不支持）
     assert doc_supported("txt", "pdf") is False
-    assert doc_supported("pdf", "txt") is False
     assert doc_supported("docx", "xlsx") is False
     assert doc_supported("pptx", "txt") is False
     assert doc_supported("xlsx", "txt") is False
     assert doc_supported("docx", "csv") is False
+    assert doc_supported("pdf", "xlsx") is False
+    assert doc_supported("pdf", "odt") is False
 
 
 def test_build_kit_args():
