@@ -95,8 +95,11 @@ def atomic_output(cmd: list[str], dst: str, stop_event) -> None:
     """Run with a .part.<uuid4> temp output, atomically replace on success.
 
     The temp name keeps the target extension so tools that pick the muxer
-    from the file extension (ffmpeg) still work.
+    from the file extension (ffmpeg) still work. dst is absolutized: a
+    relative dst combined with a relative cwd would be resolved twice and
+    produce a non-existent directory.
     """
+    dst = os.path.abspath(dst)
     suffix = os.path.splitext(dst)[1]
     part = f"{dst}.part.{uuid.uuid4().hex}{suffix}"
     part_cmd = cmd[:-1] + [part]

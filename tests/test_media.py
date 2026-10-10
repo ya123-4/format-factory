@@ -20,6 +20,17 @@ def test_build_args_copy():
     assert args[-1] == "b.mkv"
 
 
+def test_build_args_hls_input_allows_all_extensions():
+    args = build_media_args("a.vdat", "b.mp4", _video_meta(), "high", True, hls_input=True)
+    i = args.index("-allowed_extensions")
+    assert args[i + 1] == "ALL"
+
+
+def test_build_args_no_hls_flag_by_default():
+    args = build_media_args("a.mp4", "b.mkv", _video_meta(), "high", True)
+    assert "-allowed_extensions" not in args
+
+
 def test_build_args_video_crf_quality():
     for quality, crf in (("high", "18"), ("medium", "23"), ("low", "28")):
         args = build_media_args("a.mp4", "b.mp4", _video_meta(), quality, copy_ok=False)

@@ -127,3 +127,21 @@ def test_atomic_output_part_keeps_extension(tmp_path, monkeypatch):
     part = calls[0][-1]
     assert part.endswith(".mkv"), f"part must keep extension for muxer detection: {part}"
     assert ".part." in part
+
+
+def test_atomic_output_absolutizes_relative_dst(tmp_path, monkeypatch):
+    """相对 dst + 相对 cwd 会双重解析导致 ffmpeg 找不到输出目录 → 必须转绝对路径。"""
+    import os
+
+    calls = []
+
+    def fake_run_tool(cmd, cwd, stop_event=None):
+        calls.append((cmd, cwd))
+        open(cmd[-1], "w").write("done")
+
+    monkeypatch.setattr(runner, "run_tool", fake_run_tool)
+    rel = os.path.relpath(str(tmp_path / "out.mp4"))
+    runner.atomic_output(["ff.exe", "-i", "a", rel], rel, None)
+    cmd, cwd = calls[0]
+    assert os.path.isabs(cmd[-1])
+    assert os.path.isabs(cwd)

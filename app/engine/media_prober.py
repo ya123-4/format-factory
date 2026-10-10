@@ -73,6 +73,7 @@ class FfprobeMediaProber:
 
 _VIDEO_RE = re.compile(r"Stream #\d+:\d+[^\n]*?Video: (\w+)")
 _AUDIO_RE = re.compile(r"Stream #\d+:\d+[^\n]*?Audio: (\w+)")
+_CONTAINER_RE = re.compile(r"Input #\d+, ([\w,]+), from")
 
 
 def parse_ffmpeg_text(stderr: str) -> MediaMeta | None:
@@ -81,16 +82,23 @@ def parse_ffmpeg_text(stderr: str) -> MediaMeta | None:
         return None
     video = _VIDEO_RE.search(stderr)
     audio = _AUDIO_RE.search(stderr)
+    container = ""
+    c = _CONTAINER_RE.search(stderr)
+    if c:
+        container = c.group(1)
     if video is not None:
         return MediaMeta(
             kind="video",
             codec=video.group(1).lower(),
-            container="",
+            container=container,
             has_audio=audio is not None,
         )
     if audio is not None:
         return MediaMeta(
-            kind="audio", codec=audio.group(1).lower(), container="", has_audio=True
+            kind="audio",
+            codec=audio.group(1).lower(),
+            container=container,
+            has_audio=True,
         )
     return None
 
@@ -98,11 +106,12 @@ def parse_ffmpeg_text(stderr: str) -> MediaMeta | None:
 class FfmpegTextProber:
     """MediaProber backed by `ffmpeg -i` stderr parsing (fallback when ffprobe is absent)."""
 
-    def __init__(self, ffmpeg_path: str):
+    def __init__(self, ffmpeg_path: str, runner=subprocess.run):
         self._ffmpeg = ffmpeg_path
+        self._runner = runner
 
     def probe(self, path: str) -> MediaMeta:
-        r = subprocess.run(
+        r = self._runner(
             [self._ffmpeg, "-hide_banner", "-i", path],
             capture_output=True,
             text=True,
@@ -110,6 +119,20 @@ class FfmpegTextProber:
             errors="replace",
         )
         meta = parse_ffmpeg_text(r.stderr or "")
+        if meta is None and "allowed_extensions" in (r.stderr or ""):
+            # HLS 分片无扩展名被 ffmpeg 安全策略拦截 → 重试放开扩展名限制
+            r = self._runner(
+                [
+                    self._ffmpeg, "-hide_banner",
+                    "-allowed_extensions", "ALL",
+                    "-i", path,
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+            )
+            meta = parse_ffmpeg_text(r.stderr or "")
         if meta is None:
             detail = ""
             stderr = (r.stderr or "").strip()

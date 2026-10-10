@@ -55,9 +55,18 @@ def copy_compatible(src_meta: MediaMeta, target_fmt: str) -> bool | None:
 
 
 def build_media_args(
-    src: str, dst: str, src_meta: MediaMeta, quality: str, copy_ok: bool
+    src: str,
+    dst: str,
+    src_meta: MediaMeta,
+    quality: str,
+    copy_ok: bool,
+    hls_input: bool = False,
 ) -> list[str]:
-    args = ["-y", "-hide_banner", "-nostats", "-i", src]
+    args = ["-y", "-hide_banner", "-nostats"]
+    if hls_input:
+        # cosblaster 式 HLS 分片无扩展名，ffmpeg 安全策略默认拦截
+        args += ["-allowed_extensions", "ALL"]
+    args += ["-i", src]
     if copy_ok:
         return args + ["-c", "copy", dst]
     tgt = dst.rsplit(".", 1)[-1].lower()
@@ -118,7 +127,10 @@ class MediaEngine:
             copy_ok = False
             quality = "high"
             note = "源编码未知，已按高质量重编码"
-        args = build_media_args(job.src_path, job.final_path, meta, quality, copy_ok)
+        is_hls = "hls" in (meta.container or "").lower()
+        args = build_media_args(
+            job.src_path, job.final_path, meta, quality, copy_ok, hls_input=is_hls
+        )
         self._run([self._ffmpeg] + args, job.final_path, self._stop)
         return note
 

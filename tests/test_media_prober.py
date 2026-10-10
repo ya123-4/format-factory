@@ -89,6 +89,55 @@ def test_parse_ffmpeg_text_extracts_codecs():
     assert meta.kind == "video"
     assert meta.codec == "h264"
     assert meta.has_audio is True
+    assert meta.container == "mov,mp4,m4a,3gp,3g2,mj2"
+
+
+def test_parse_ffmpeg_text_hls_container():
+    hls_sample = (
+        "Input #0, hls,applehttp, from 'x.vdat':\n"
+        "  Duration: 00:10:00.00, start: 0.000000\n"
+        "  Stream #0:0: Video: h264 (High), yuv420p\n"
+        "  Stream #0:1: Audio: aac (LC), 44100 Hz\n"
+        "At least one output file must be specified\n"
+    )
+    meta = parse_ffmpeg_text(hls_sample)
+    assert meta.kind == "video"
+    assert meta.codec == "h264"
+    assert meta.container == "hls,applehttp"
+
+
+class _FakeRunner:
+    """Fake subprocess.run for probe retry tests."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(cmd)
+        return self._responses.pop(0)
+
+
+def test_probe_retries_hls_with_allowed_extensions():
+    import subprocess as sp
+
+    from app.engine.media_prober import FfmpegTextProber
+
+    fail = sp.CompletedProcess([], 1, "", "Filename extension is not a common multimedia extension... allowed_extensions... Invalid data")
+    ok = sp.CompletedProcess(
+        [], 0, "",
+        "Input #0, hls,applehttp, from 'x':\n"
+        "  Stream #0:0: Video: h264 (High), yuv420p\n"
+        "At least one output file must be specified\n",
+    )
+    runner = _FakeRunner([fail, ok])
+    prober = FfmpegTextProber("ff.exe", runner=runner)
+    meta = prober.probe("x.vdat")
+    assert meta.kind == "video"
+    # 第二次调用带 -allowed_extensions ALL
+    assert any(
+        cmd[2] == "-allowed_extensions" and cmd[3] == "ALL" for cmd in runner.calls
+    )
 
 
 def test_parse_ffmpeg_text_audio_only():
