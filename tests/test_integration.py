@@ -340,9 +340,40 @@ def test_document_pdf_to_pptx(tmp_path):
 
     prs = Presentation(str(out))
     assert len(prs.slides) == 2  # PDF 两页 → 两张幻灯片
+    # 有文本层 → 文本框模式（文字可编辑）
+    all_text = []
     for slide in prs.slides:
-        pics = [s for s in slide.shapes if s.shape_type == 13]  # PICTURE
-        assert len(pics) == 1
+        boxes = [s for s in slide.shapes if s.shape_type == 17]  # TEXT_BOX
+        assert len(boxes) >= 1
+        all_text.extend(
+            s.text_frame.text for s in slide.shapes if s.has_text_frame
+        )
+    joined = " ".join(all_text)
+    assert "FormatFactory" in joined
+    assert "second page" in joined
+
+
+def test_document_scanned_pdf_to_pptx_image_mode(tmp_path):
+    # 扫描件（无文本层）→ pptx 回退图片模式
+    src = _make_pdf(tmp_path)
+    import fitz
+
+    text_doc = fitz.open(str(src))
+    pix = text_doc[0].get_pixmap(dpi=150)
+    text_doc.close()
+    scanned = tmp_path / "scanned.pdf"
+    out_doc = fitz.open()
+    img_page = out_doc.new_page(width=pix.width, height=pix.height)
+    img_page.insert_image(img_page.rect, pixmap=pix)
+    out_doc.save(str(scanned))
+    out_doc.close()
+    summary, job = _convert_doc(scanned, tmp_path, "pptx")
+    assert summary.done == 1
+    from pptx import Presentation
+
+    prs = Presentation(str(job.final_path))
+    pics = [s for s in prs.slides[0].shapes if s.shape_type == 13]  # PICTURE
+    assert len(pics) == 1
 
 
 def test_document_scanned_pdf_ocr(tmp_path):

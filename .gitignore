@@ -9,6 +9,7 @@ tools/
 .tmp/
 .tmp-tests/
 .appdata-test/
+libs/
 debug.log
 pytest-cache-files*/
 .tmp-kit-test/

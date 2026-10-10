@@ -221,7 +221,8 @@ class DocConverter:
             doc.close()
 
     def _pdf_to_pptx(self, src: str, part: str, tmp_dir: Path) -> None:
-        """Render each page as a full-bleed picture slide (layout-faithful)."""
+        """Text-layer pages -> editable text boxes at original coordinates;
+        pages without text (scans) -> full-bleed picture slides."""
         try:
             from pptx import Presentation
         except ImportError as e:
@@ -233,19 +234,42 @@ class DocConverter:
             sw, sh = prs.slide_width, prs.slide_height
             blank = prs.slide_layouts[6]
             for i, page in enumerate(doc):
-                png = tmp_dir / f"page-{i}.png"
-                page.get_pixmap(dpi=150).save(str(png))
+                slide = prs.slides.add_slide(blank)
                 pw, ph = page.rect.width, page.rect.height
                 scale = min(sw / pw, sh / ph)
-                pic_w, pic_h = int(pw * scale), int(ph * scale)
-                slide = prs.slides.add_slide(blank)
-                slide.shapes.add_picture(
-                    str(png),
-                    (sw - pic_w) // 2,
-                    (sh - pic_h) // 2,
-                    width=pic_w,
-                    height=pic_h,
-                )
+                off_x = (sw - pw * scale) / 2
+                off_y = (sh - ph * scale) / 2
+                text_added = False
+                for block in page.get_text("dict").get("blocks", []):
+                    if block.get("type") != 0:
+                        continue  # 非文本块（图片等）跳过
+                    x0, y0, x1, y1 = block["bbox"]
+                    lines = [
+                        " ".join(s["text"] for s in line.get("spans", []))
+                        for line in block.get("lines", [])
+                    ]
+                    text = "\n".join(ln for ln in lines if ln.strip())
+                    if not text.strip():
+                        continue
+                    box = slide.shapes.add_textbox(
+                        int(off_x + x0 * scale),
+                        int(off_y + y0 * scale),
+                        max(int((x1 - x0) * scale), 1000),
+                        max(int((y1 - y0) * scale), 1000),
+                    )
+                    box.text_frame.text = text
+                    text_added = True
+                if not text_added:
+                    # 无文本层（扫描件）：整页图片
+                    png = tmp_dir / f"page-{i}.png"
+                    page.get_pixmap(dpi=150).save(str(png))
+                    slide.shapes.add_picture(
+                        str(png),
+                        int(off_x),
+                        int(off_y),
+                        width=int(pw * scale),
+                        height=int(ph * scale),
+                    )
             prs.save(part)
         finally:
             doc.close()
