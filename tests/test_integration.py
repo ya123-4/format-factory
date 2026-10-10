@@ -463,3 +463,54 @@ def test_pdf_to_docx_image_backfill_when_converter_drops_images(tmp_path, monkey
     with zipfile.ZipFile(Path(job.final_path)) as z:
         media = [n for n in z.namelist() if n.startswith("word/media/")]
         assert len(media) >= 1  # 补丁已把图片补回 docx
+
+
+def test_pdf_image_inventory_includes_inline_images(tmp_path, monkeypatch):
+    """内联图像（xref=0，如电子印章）get_images 看不到，必须计入并裁剪渲染补插。"""
+    import sys
+    import types
+
+    from app.engine.document import _pdf_image_inventory
+
+    class FakeConverter:
+        def __init__(self, src):
+            pass
+
+        def convert(self, out):
+            from app.engine.document import _write_minimal_docx
+
+            _write_minimal_docx(["no images"], out)
+
+        def close(self):
+            pass
+
+    fake_mod = types.ModuleType("pdf2docx")
+    fake_mod.Converter = FakeConverter
+    monkeypatch.setitem(sys.modules, "pdf2docx", fake_mod)
+
+    src = _make_pdf_with_image(tmp_path)  # 1 张普通位图
+    import fitz
+
+    real_get_image_info = fitz.Page.get_image_info
+
+    def fake_get_image_info(self, *args, **kwargs):
+        infos = real_get_image_info(self, *args, **kwargs)
+        infos.append({"xref": 0, "bbox": (10.0, 10.0, 60.0, 60.0)})  # 模拟内联印章
+        return infos
+
+    monkeypatch.setattr(fitz.Page, "get_image_info", fake_get_image_info)
+    try:
+        inventory = _pdf_image_inventory(str(src))
+        kinds = [i["type"] for i in inventory]
+        assert "extract" in kinds
+        assert "clip" in kinds  # 内联图 → 裁剪渲染项
+
+        summary, job = _convert_doc(src, tmp_path, "docx")
+        assert summary.done == 1
+        import zipfile
+
+        with zipfile.ZipFile(Path(job.final_path)) as z:
+            media = [n for n in z.namelist() if n.startswith("word/media/")]
+            assert len(media) >= 2  # 普通图 + 内联印章裁剪图
+    finally:
+        monkeypatch.setattr(fitz.Page, "get_image_info", real_get_image_info)

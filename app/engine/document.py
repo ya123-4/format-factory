@@ -88,27 +88,67 @@ def _count_docx_media(docx_path: str) -> int:
         return len([n for n in z.namelist() if n.startswith("word/media/")])
 
 
-def _pdf_images_missing_from_docx(src: str, docx_path: str) -> list:
-    """When the docx has fewer images than the PDF, return every PDF image
-    (duplicating beats dropping)."""
+def _pdf_image_inventory(src: str) -> list[dict]:
+    """Every visual image in the PDF, including inline images (xref=0) that
+    get_images() cannot see. Items: {'type':'extract', info, data} or
+    {'type':'clip', page, bbox} (clip = render the region)."""
     import fitz
 
     doc = fitz.open(src)
     try:
-        images = []
+        items = []
         for pno, page in enumerate(doc):
             for img in page.get_images(full=True):
                 xref = img[0]
                 info = doc.extract_image(xref)
                 info["page"] = pno + 1
-                images.append((xref, info, info["image"]))
+                items.append(
+                    {"type": "extract", "info": info, "data": info["image"]}
+                )
+            for im in page.get_image_info(xrefs=True):
+                if im.get("xref") == 0:  # 内联图像：只能按位置裁剪渲染
+                    items.append(
+                        {
+                            "type": "clip",
+                            "page": pno,
+                            "bbox": fitz.Rect(im["bbox"]),
+                        }
+                    )
+        return items
     finally:
         doc.close()
-    if not images:
+
+
+def _pdf_images_missing_from_docx(src: str, docx_path: str) -> list:
+    """When the docx has fewer images than the PDF, return every PDF image
+    (duplicating beats dropping)."""
+    items = _pdf_image_inventory(src)
+    if not items:
         return []
-    if len(images) > _count_docx_media(docx_path):
-        return images
+    if len(items) > _count_docx_media(docx_path):
+        return items
     return []
+
+
+def _write_image_with_alpha(info: dict, data: bytes, out_path) -> None:
+    """Write extracted image as PNG; merge smask (alpha channel) when present."""
+    if info.get("smask"):
+        import io
+
+        from PIL import Image
+
+        base = Image.open(io.BytesIO(data)).convert("RGB")
+        alpha = Image.open(io.BytesIO(info["smask"])).convert("L")
+        base.putalpha(alpha)
+        base.save(str(out_path))
+    elif info.get("ext") == "png":
+        out_path.write_bytes(data)
+    else:
+        import io
+
+        from PIL import Image
+
+        Image.open(io.BytesIO(data)).save(str(out_path))
 
 
 class DocConverter:
@@ -227,25 +267,36 @@ class DocConverter:
             cv.close()
         missing = _pdf_images_missing_from_docx(src, part)
         if missing:
-            self._append_images(part, tmp_dir, missing)
+            self._append_images(part, src, tmp_dir, missing)
             return f"已补插 {len(missing)} 张图片（pdf2docx 未导出，已追加到文末）"
         return None
 
-    def _append_images(self, docx_path: str, tmp_dir: Path, images: list) -> None:
-        """Append extracted PDF images to the end of the docx."""
+    def _append_images(self, docx_path: str, src: str, tmp_dir: Path, items: list) -> None:
+        """Append PDF images (extracted or region-rendered) to the docx end."""
         try:
             from docx import Document
             from docx.shared import Inches
         except ImportError as e:
             raise ToolMissing("docx 补图组件缺失（python-docx 未安装）") from e
+        fitz = _fitz()
         d = Document(docx_path)
         d.add_paragraph("── 以下为原 PDF 图片（自动补插）──")
-        for idx, (xref, info, data) in enumerate(images):
-            ext = info["ext"] if info["ext"] in ("png", "jpg", "jpeg") else "png"
-            img_path = tmp_dir / f"backfill-{idx}.{ext}"
-            img_path.write_bytes(data)
+        for idx, item in enumerate(items):
+            img_path = tmp_dir / f"backfill-{idx}.png"
+            if item["type"] == "extract":
+                info, data = item["info"], item["data"]
+                _write_image_with_alpha(info, data, img_path)
+                page_no = info.get("page", "?")
+            else:  # clip：内联图像按位置渲染裁剪
+                doc = fitz.open(src)
+                try:
+                    page = doc[item["page"]]
+                    page.get_pixmap(clip=item["bbox"], dpi=200).save(str(img_path))
+                finally:
+                    doc.close()
+                page_no = item["page"] + 1
             d.add_picture(str(img_path), width=Inches(5.5))
-            d.add_paragraph(f"[第 {info.get('page', '?')} 页图片]")
+            d.add_paragraph(f"[第 {page_no} 页图片]")
         d.save(docx_path)
 
     def _pdf_to_xlsx(self, src: str, part: str) -> None:
