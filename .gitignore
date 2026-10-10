@@ -5,11 +5,13 @@ tools/
 .superpowers/
 .pytest-libs/
 .wheels/
-.pytest-bootstrap/
 .tmp/
 .tmp-tests/
 .appdata-test/
 libs/
+build/
+dist/
+*.spec
 debug.log
 pytest-cache-files*/
 .tmp-kit-test/

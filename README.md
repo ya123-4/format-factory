@@ -67,6 +67,34 @@ python -m pytest tests -v
 
 - 引擎层（`app/engine/`）零 GUI 依赖，单测覆盖格式映射、兼容矩阵、冲突策略、状态机、参数构建、日志轮转。
 - 集成测试用 FFmpeg lavfi 现场生成素材，真跑四类转换、递归目录、跳过、停止。
+
+## 从源码重建（新机器/无预装依赖时）
+
+仓库不包含体积大的二进制（`tools/`、`libs/`），按以下步骤重建：
+
+```powershell
+# 1. Python 运行依赖（PyMuPDF/pdf2docx/OCR/openpyxl/pptx 等）→ libs\
+python .pytest-bootstrap\fetch_doc_tools.py
+python .pytest-bootstrap\fetch_rapidocr_deps.py
+python .pytest-bootstrap\fix_wheels.py        # 修正 wheel 平台变体
+
+# 2. FFmpeg → tools\ffmpeg\
+#    从 https://www.gyan.dev/ffmpeg/builds/ 下载 release-essentials，
+#    解压 bin\ffmpeg.exe 到 tools\ffmpeg\（可选 ffprobe.exe）
+
+# 3. 测试环境（可选）
+python .pytest-bootstrap\fetch_pdf_tools.py   # 旧测试依赖（已并入 1）
+python .pytest-bootstrap\fetch_pyinstaller.py # 打包工具
+
+# 4. 打包 exe
+powershell -ExecutionPolicy Bypass -File .pytest-bootstrap\build_exe.ps1
+```
+
+> 注：`libs/` 的 wheel 选择逻辑要求 Python 3.14（cp314 变体，排除 free-threaded cp314t 与 32 位）。
+
+## exe 打包（FormatFactory.exe）
+
+打包产物 `dist\FormatFactory.exe`（onefile，含 FFmpeg 与全部运行时依赖，约 250MB）。
 - 设计文档：`../docs/superpowers/specs/2026-10-09-format-factory-design.md`（本仓库外）。
 
 ## 打包 exe（阶段二，验收后）
