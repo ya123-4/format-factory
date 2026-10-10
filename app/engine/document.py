@@ -90,20 +90,31 @@ def _count_docx_media(docx_path: str) -> int:
 
 def _pdf_image_inventory(src: str) -> list[dict]:
     """Every visual image in the PDF, including inline images (xref=0) that
-    get_images() cannot see. Items: {'type':'extract', info, data} or
-    {'type':'clip', page, bbox} (clip = render the region)."""
+    get_images() cannot see. Items: {'type':'extract'|'clip', 'page', 'bbox',
+    plus info/data for extract}. bbox is the on-page rect in PDF points."""
     import fitz
 
     doc = fitz.open(src)
     try:
         items = []
         for pno, page in enumerate(doc):
+            info_map = {}
+            for im in page.get_image_info(xrefs=True):
+                if im.get("xref"):
+                    info_map[im["xref"]] = im["bbox"]
             for img in page.get_images(full=True):
                 xref = img[0]
                 info = doc.extract_image(xref)
                 info["page"] = pno + 1
+                info["bbox"] = info_map.get(xref)
                 items.append(
-                    {"type": "extract", "info": info, "data": info["image"]}
+                    {
+                        "type": "extract",
+                        "info": info,
+                        "data": info["image"],
+                        "page": pno,
+                        "bbox": info_map.get(xref),
+                    }
                 )
             for im in page.get_image_info(xrefs=True):
                 if im.get("xref") == 0:  # 内联图像：只能按位置裁剪渲染
@@ -149,6 +160,138 @@ def _write_image_with_alpha(info: dict, data: bytes, out_path) -> None:
         from PIL import Image
 
         Image.open(io.BytesIO(data)).save(str(out_path))
+
+
+def _set_page_size(d, src: str) -> None:
+    """Match the docx section size to the PDF page size (anchor coords depend on it)."""
+    import fitz
+
+    doc = fitz.open(src)
+    try:
+        page = doc[0]
+        w_pt, h_pt = page.rect.width, page.rect.height
+    finally:
+        doc.close()
+    from docx.shared import Emu
+
+    for section in d.sections:
+        section.page_width = Emu(int(w_pt * 12700))
+        section.page_height = Emu(int(h_pt * 12700))
+
+
+def _all_paragraphs(d):
+    """Every paragraph in the document, including those inside tables."""
+    for p in d.paragraphs:
+        yield p
+    for table in d.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    yield p
+
+
+def _strip_drawings(paragraph) -> None:
+    """Remove every <w:drawing> from a paragraph's runs."""
+    from docx.oxml.ns import qn
+
+    for run in paragraph.runs:
+        for drawing in run._r.findall(qn("w:drawing")):
+            run._r.remove(drawing)
+
+
+def _page_anchor_map(d, src: str) -> dict:
+    """Map PDF page index -> docx paragraph to anchor that page's images to."""
+    import fitz
+
+    doc = fitz.open(src)
+    try:
+        first_lines = []
+        for page in doc:
+            first = ""
+            for ln in page.get_text().splitlines():
+                t = ln.strip()
+                if t:
+                    first = t[:24]
+                    break
+            first_lines.append(first)
+    finally:
+        doc.close()
+    paras = d.paragraphs
+    anchors = {}
+    for pno, first in enumerate(first_lines):
+        if not first:
+            continue
+        for para in paras:
+            ptext = para.text.strip()
+            if len(ptext) >= 4 and (ptext.startswith(first[:8]) or first[:8] in ptext[:60]):
+                anchors[pno] = para
+                break
+    fallback = paras[0] if paras else None
+    last = fallback
+    for pno in range(len(first_lines)):
+        if pno in anchors:
+            last = anchors[pno]
+        else:
+            anchors[pno] = last
+    return anchors
+
+
+def _clip_dpi(page, bbox) -> int:
+    """Render dpi for an inline image: match its native pixel density."""
+    import fitz
+
+    best = 300
+    for im in page.get_image_info(xrefs=True):
+        r = fitz.Rect(im["bbox"])
+        if r.intersects(bbox):
+            w_px = im.get("width", 0)
+            if w_px and r.width > 0:
+                dpi = w_px / r.width * 72
+                best = max(best, int(min(dpi, 400)))
+    return best
+
+
+def _insert_anchored_picture(d, para, img_path, x_emu, y_emu, w_emu, h_emu) -> None:
+    """Insert a picture floating at absolute page coordinates (wp:anchor)."""
+    from docx.oxml.ns import qn
+    from lxml import etree
+
+    run = para.add_run()
+    run.add_picture(str(img_path), width=w_emu, height=h_emu)
+    drawing = run._r.find(qn("w:drawing"))
+    if drawing is None:
+        return
+    inline = drawing.find(qn("wp:inline"))
+    if inline is None:
+        return
+    # inline -> anchor，并补绝对定位元素（OOXML 子元素顺序敏感）
+    inline.tag = qn("wp:anchor")
+    for attr, val in (
+        ("wp:distT", "0"), ("wp:distB", "0"), ("wp:distL", "0"), ("wp:distR", "0"),
+        ("wp:simplePos", "0"), ("wp:relativeHeight", "0"), ("wp:behindDoc", "0"),
+        ("wp:locked", "0"), ("wp:layoutInCell", "1"), ("wp:allowOverlap", "1"),
+    ):
+        inline.set(qn(attr), val)
+    extent = inline.find(qn("wp:extent"))
+    if extent is not None:
+        simple_pos = etree.SubElement(inline, qn("wp:simplePos"))
+        simple_pos.set("x", "0")
+        simple_pos.set("y", "0")
+        pos_h = etree.SubElement(inline, qn("wp:positionH"))
+        pos_h.set(qn("wp:relativeFrom"), "page")
+        off_h = etree.SubElement(pos_h, qn("wp:posOffset"))
+        off_h.text = str(int(x_emu))
+        pos_v = etree.SubElement(inline, qn("wp:positionV"))
+        pos_v.set(qn("wp:relativeFrom"), "page")
+        off_v = etree.SubElement(pos_v, qn("wp:posOffset"))
+        off_v.text = str(int(y_emu))
+        # 保持顺序：simplePos, positionH, positionV, extent
+        for el in (simple_pos, pos_h, pos_v):
+            extent.addprevious(el)
+        wrap = etree.SubElement(inline, qn("wp:wrapNone"))
+        doc_pr = inline.find(qn("wp:docPr"))
+        if doc_pr is not None:
+            doc_pr.addprevious(wrap)
 
 
 class DocConverter:
@@ -265,38 +408,55 @@ class DocConverter:
             cv.convert(part)
         finally:
             cv.close()
-        missing = _pdf_images_missing_from_docx(src, part)
-        if missing:
-            self._append_images(part, src, tmp_dir, missing)
-            return f"已补插 {len(missing)} 张图片（pdf2docx 未导出，已追加到文末）"
+        images = _pdf_image_inventory(src)
+        if images:
+            self._reposition_images(part, src, tmp_dir, images)
+            return f"已按原位置重插 {len(images)} 张图片"
         return None
 
-    def _append_images(self, docx_path: str, src: str, tmp_dir: Path, items: list) -> None:
-        """Append PDF images (extracted or region-rendered) to the docx end."""
+    def _reposition_images(self, docx_path: str, src: str, tmp_dir: Path, items: list) -> None:
+        """Remove pdf2docx drawings and re-insert every PDF image as a page-
+        anchored floating picture at its original coordinates."""
         try:
             from docx import Document
-            from docx.shared import Inches
         except ImportError as e:
-            raise ToolMissing("docx 补图组件缺失（python-docx 未安装）") from e
+            raise ToolMissing("docx 图片定位组件缺失（python-docx 未安装）") from e
         fitz = _fitz()
         d = Document(docx_path)
-        d.add_paragraph("── 以下为原 PDF 图片（自动补插）──")
-        for idx, item in enumerate(items):
-            img_path = tmp_dir / f"backfill-{idx}.png"
-            if item["type"] == "extract":
-                info, data = item["info"], item["data"]
-                _write_image_with_alpha(info, data, img_path)
-                page_no = info.get("page", "?")
-            else:  # clip：内联图像按位置渲染裁剪
-                doc = fitz.open(src)
-                try:
-                    page = doc[item["page"]]
-                    page.get_pixmap(clip=item["bbox"], dpi=200).save(str(img_path))
-                finally:
-                    doc.close()
-                page_no = item["page"] + 1
-            d.add_picture(str(img_path), width=Inches(5.5))
-            d.add_paragraph(f"[第 {page_no} 页图片]")
+        _set_page_size(d, src)
+        # 1. 删除所有既有 drawing（pdf2docx 插入的图片统一重插，含表格内）
+        for p in _all_paragraphs(d):
+            _strip_drawings(p)
+        # 2. 页锚点：PDF 每页首行文本 → docx 段落索引
+        anchors = _page_anchor_map(d, src)
+        # 3. 按页、按位置插入浮动图片
+        from docx.shared import Emu
+
+        doc = fitz.open(src)
+        try:
+            for idx, item in enumerate(items):
+                if item["bbox"] is None:
+                    continue
+                page_no = item["page"]
+                img_path = tmp_dir / f"repos-{idx}.png"
+                if item["type"] == "extract":
+                    _write_image_with_alpha(item["info"], item["data"], img_path)
+                else:
+                    # 内联图：按原像素密度渲染裁剪（尽量还原原图清晰度）
+                    bbox = item["bbox"]
+                    dpi = _clip_dpi(doc[page_no], bbox)
+                    doc[page_no].get_pixmap(clip=bbox, dpi=dpi).save(str(img_path))
+                x0, y0, x1, y1 = item["bbox"]
+                para = anchors.get(page_no, d.paragraphs[0])
+                _insert_anchored_picture(
+                    d, para, img_path,
+                    x_emu=Emu(int(x0 * 12700)),
+                    y_emu=Emu(int(y0 * 12700)),
+                    w_emu=Emu(int((x1 - x0) * 12700)),
+                    h_emu=Emu(int((y1 - y0) * 12700)),
+                )
+        finally:
+            doc.close()
         d.save(docx_path)
 
     def _pdf_to_xlsx(self, src: str, part: str) -> None:

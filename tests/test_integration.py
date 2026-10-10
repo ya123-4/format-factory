@@ -465,12 +465,42 @@ def test_pdf_to_docx_image_backfill_when_converter_drops_images(tmp_path, monkey
         assert len(media) >= 1  # 补丁已把图片补回 docx
 
 
+def _make_inline_image_pdf(tmp_path):
+    """Hand-built minimal PDF whose only image is an inline image (xref=0,
+    the stamp case that get_images() cannot see)."""
+    stream = (
+        b"q 0.5 0 0 0.5 50 50 cm\n"
+        b"BI /W 2 /H 2 /CS /RGB /BPC 8\nID\n"
+        b"\xff\x00\x00\xff\x00\x00\xff\x00\x00\xff\x00\x00\nEI\nQ\n"
+    )
+    objects = [
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 300]/Resources<</ProcSet[/PDF]>>/Contents 4 0 R>>",
+        b"<</Length %d>>\nstream\n%s\nendstream" % (len(stream), stream),
+    ]
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = []
+    for i, obj in enumerate(objects, 1):
+        offsets.append(len(pdf))
+        pdf += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref_pos = len(pdf)
+    pdf += f"xref\n0 {len(objects) + 1}\n".encode()
+    pdf += b"0000000000 65535 f \n"
+    for off in offsets:
+        pdf += f"{off:010d} 00000 n \n".encode()
+    pdf += (
+        f"trailer\n<</Size {len(objects) + 1}/Root 1 0 R>>\nstartxref\n{xref_pos}\n%%EOF\n"
+    ).encode()
+    out = tmp_path / "inline.pdf"
+    out.write_bytes(bytes(pdf))
+    return out
+
+
 def test_pdf_image_inventory_includes_inline_images(tmp_path, monkeypatch):
     """内联图像（xref=0，如电子印章）get_images 看不到，必须计入并裁剪渲染补插。"""
     import sys
     import types
-
-    from app.engine.document import _pdf_image_inventory
 
     class FakeConverter:
         def __init__(self, src):
@@ -488,29 +518,21 @@ def test_pdf_image_inventory_includes_inline_images(tmp_path, monkeypatch):
     fake_mod.Converter = FakeConverter
     monkeypatch.setitem(sys.modules, "pdf2docx", fake_mod)
 
-    src = _make_pdf_with_image(tmp_path)  # 1 张普通位图
-    import fitz
+    src = _make_inline_image_pdf(tmp_path)  # 仅含内联图像
+    from app.engine.document import _pdf_image_inventory
 
-    real_get_image_info = fitz.Page.get_image_info
+    inventory = _pdf_image_inventory(str(src))
+    kinds = [i["type"] for i in inventory]
+    assert kinds == ["clip"]  # 内联图 → 裁剪渲染项
+    assert inventory[0]["bbox"] is not None
 
-    def fake_get_image_info(self, *args, **kwargs):
-        infos = real_get_image_info(self, *args, **kwargs)
-        infos.append({"xref": 0, "bbox": (10.0, 10.0, 60.0, 60.0)})  # 模拟内联印章
-        return infos
+    summary, job = _convert_doc(src, tmp_path, "docx")
+    assert summary.done == 1
+    import zipfile
 
-    monkeypatch.setattr(fitz.Page, "get_image_info", fake_get_image_info)
-    try:
-        inventory = _pdf_image_inventory(str(src))
-        kinds = [i["type"] for i in inventory]
-        assert "extract" in kinds
-        assert "clip" in kinds  # 内联图 → 裁剪渲染项
-
-        summary, job = _convert_doc(src, tmp_path, "docx")
-        assert summary.done == 1
-        import zipfile
-
-        with zipfile.ZipFile(Path(job.final_path)) as z:
-            media = [n for n in z.namelist() if n.startswith("word/media/")]
-            assert len(media) >= 2  # 普通图 + 内联印章裁剪图
-    finally:
-        monkeypatch.setattr(fitz.Page, "get_image_info", real_get_image_info)
+    with zipfile.ZipFile(Path(job.final_path)) as z:
+        media = [n for n in z.namelist() if n.startswith("word/media/")]
+        assert len(media) >= 1  # 内联印章已补回 docx
+        doc_xml = z.read("word/document.xml").decode("utf-8")
+    assert "<wp:anchor" in doc_xml  # 浮动锚定
+    assert 'relativeFrom="page"' in doc_xml  # 页面绝对定位
