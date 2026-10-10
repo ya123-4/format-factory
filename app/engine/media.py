@@ -54,6 +54,25 @@ def copy_compatible(src_meta: MediaMeta, target_fmt: str) -> bool | None:
     return None
 
 
+_MUXER = {
+    "mp4": "mp4", "m4a": "mp4", "mov": "mov", "mkv": "matroska",
+    "avi": "avi", "webm": "webm", "gif": "gif",
+    "mp3": "mp3", "wav": "wav", "flac": "flac", "aac": "adts", "ogg": "ogg",
+}
+_MP4_FAMILY = {"mp4", "m4a"}
+
+
+def _pipe_out(dst: str) -> list[str]:
+    """Output spec for stdout-pipe mode: muxer name + pipe target."""
+    tgt = dst.rsplit(".", 1)[-1].lower()
+    muxer = _MUXER.get(tgt, tgt)
+    out = ["-f", muxer]
+    if tgt in _MP4_FAMILY:
+        # mp4 是索引式容器，流式输出需要分片化
+        out += ["-movflags", "frag_keyframe+empty_moov"]
+    return out + ["pipe:1"]
+
+
 def build_media_args(
     src: str,
     dst: str,
@@ -61,34 +80,50 @@ def build_media_args(
     quality: str,
     copy_ok: bool,
     hls_input: bool = False,
+    pipe_mode: bool = False,
+    aac_bsf: bool = False,
 ) -> list[str]:
+    def _finish(encoded: list[str]) -> list[str]:
+        if pipe_mode:
+            return args + encoded + _pipe_out(dst)
+        return args + encoded + [dst]
+
     args = ["-y", "-hide_banner", "-nostats"]
     if hls_input:
         # cosblaster 式 HLS 分片无扩展名，ffmpeg 安全策略默认拦截
         args += ["-allowed_extensions", "ALL"]
     args += ["-i", src]
     if copy_ok:
-        return args + ["-c", "copy", dst]
+        enc = ["-c", "copy"]
+        if aac_bsf:
+            # TS/HLS 源的 ADTS AAC 流入 mp4 需要转换封装
+            enc += ["-bsf:a", "aac_adtstoasc"]
+        return _finish(enc)
     tgt = dst.rsplit(".", 1)[-1].lower()
     if tgt in VIDEO_FORMATS:
         if tgt == "gif":
-            return args + ["-vf", "fps=10,scale=320:-1", dst]
+            return _finish(["-vf", "fps=10,scale=320:-1"])
         if tgt == "webm":
-            args += ["-c:v", "libvpx-vp9", "-crf", CRF[quality]]
-            args += ["-c:a", "libopus", "-b:a", AUDIO_BITRATE[quality]]
-            return args + [dst]
-        args += ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", CRF[quality]]
-        args += ["-c:a", "aac", "-b:a", AUDIO_BITRATE[quality]]
-        return args + [dst]
+            return _finish(
+                ["-c:v", "libvpx-vp9", "-crf", CRF[quality],
+                 "-c:a", "libopus", "-b:a", AUDIO_BITRATE[quality]]
+            )
+        return _finish(
+            ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", CRF[quality],
+             "-c:a", "aac", "-b:a", AUDIO_BITRATE[quality]]
+        )
     if tgt in AUDIO_FORMATS:
+        enc = []
         if src_meta.kind == "video":
-            args += ["-vn"]
+            enc += ["-vn"]
         if tgt == "wav":
-            return args + ["-c:a", "pcm_s16le", dst]
-        if tgt == "flac":
-            return args + ["-c:a", "flac", dst]
-        return args + ["-c:a", _AUDIO_ENCODER[tgt], "-b:a", AUDIO_BITRATE[quality], dst]
-    return args + [dst]
+            enc += ["-c:a", "pcm_s16le"]
+        elif tgt == "flac":
+            enc += ["-c:a", "flac"]
+        else:
+            enc += ["-c:a", _AUDIO_ENCODER[tgt], "-b:a", AUDIO_BITRATE[quality]]
+        return _finish(enc)
+    return _finish([])
 
 
 class MediaEngine:
@@ -128,8 +163,10 @@ class MediaEngine:
             quality = "high"
             note = "源编码未知，已按高质量重编码"
         is_hls = "hls" in (meta.container or "").lower()
+        needs_aac_bsf = is_hls or "mpegts" in (meta.container or "").lower()
         args = build_media_args(
-            job.src_path, job.final_path, meta, quality, copy_ok, hls_input=is_hls
+            job.src_path, job.final_path, meta, quality, copy_ok,
+            hls_input=is_hls, pipe_mode=True, aac_bsf=needs_aac_bsf,
         )
         self._run([self._ffmpeg] + args, job.final_path, self._stop)
         return note
@@ -142,6 +179,6 @@ def _default_prober(ffprobe_path: str, ffmpeg_path: str):
 
 
 def _default_run(cmd, dst, stop_event):
-    from app.engine.runner import atomic_output
+    from app.engine.runner import atomic_output_pipe
 
-    atomic_output(cmd, dst, stop_event)
+    atomic_output_pipe(cmd, dst, stop_event)

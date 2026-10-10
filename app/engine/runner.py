@@ -116,6 +116,91 @@ def _tmp_work_dir() -> str:
     return d
 
 
+def atomic_output_pipe(cmd: list[str], dst: str, stop_event) -> None:
+    """Tool writes its output to stdout (cmd must end with 'pipe:1'); Python
+    streams it to disk. Bypasses AV write-blocks on the tool executable —
+    the Python process (same trust level as Explorer) does the file writing.
+    """
+    import shutil
+
+    dst = os.path.abspath(dst)
+    suffix = os.path.splitext(dst)[1]
+    work = _tmp_work_dir()
+    part = os.path.join(work, f"{uuid.uuid4().hex}{suffix}")
+    proc = subprocess.Popen(
+        cmd,
+        cwd=work,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=False,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    )
+    tail_lines: "collections.deque[str]" = collections.deque(maxlen=STDERR_TAIL_LINES)
+
+    def reader_err():
+        try:
+            for raw in proc.stderr:
+                tail_lines.append(
+                    raw.decode("utf-8", errors="replace").rstrip("\n")
+                )
+        except Exception:
+            pass
+
+    def reader_out(fh):
+        try:
+            while True:
+                chunk = proc.stdout.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+        except Exception:
+            pass
+
+    t_err = threading.Thread(target=reader_err, daemon=True)
+    t_err.start()
+    try:
+        with open(part, "wb") as fh:
+            t_out = threading.Thread(target=reader_out, args=(fh,), daemon=True)
+            t_out.start()
+            while True:
+                try:
+                    rc = proc.wait(timeout=0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    if stop_event is not None and stop_event.is_set():
+                        stop_tree(proc)
+                        try:
+                            proc.wait(timeout=15)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        raise Cancelled("stopped by user")
+            t_out.join(timeout=30)
+    except BaseException:
+        try:
+            os.unlink(part)
+        except OSError:
+            pass
+        raise
+    finally:
+        t_err.join(timeout=5)
+    tail = "\n".join(tail_lines)
+    if rc != 0:
+        raise _classify_failure(tail, rc)
+    shutil.move(part, dst)
+    """System temp staging dir for tool outputs.
+
+    Some AV/security products deny unknown exes (like the bundled ffmpeg)
+    from writing into user folders; writing to the temp area and letting
+    Python move the result sidesteps those blocks.
+    """
+    import tempfile
+
+    base = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+    d = os.path.join(base, "format-factory-tmp")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def atomic_output(cmd: list[str], dst: str, stop_event) -> None:
     """Run the tool with its output staged in the system temp dir, then move
     the result into place (cross-drive move = copy + delete).
