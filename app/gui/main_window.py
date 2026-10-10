@@ -59,6 +59,22 @@ def _kit_paths(config: Config):
     return "", ""
 
 
+def _dir_writable(directory: str) -> bool:
+    """Probe write access by creating and removing a temp file."""
+    import uuid
+
+    if not directory or not os.path.isdir(directory):
+        return False
+    probe = os.path.join(directory, f".write-test-{uuid.uuid4().hex}.tmp")
+    try:
+        with open(probe, "w", encoding="utf-8") as f:
+            f.write("x")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
 class MainWindow:
     def __init__(self, root: tk.Tk, config: Config):
         self.root = root
@@ -191,6 +207,13 @@ class MainWindow:
         for j in jobs:
             j.out_dir, j.rel_subdir = effective_output(j, self.config)
             j.final_path = None
+        unwritable = [d for d in {j.out_dir for j in jobs} if not _dir_writable(d)]
+        if unwritable:
+            messagebox.showwarning(
+                "输出目录不可写",
+                "以下输出目录没有写入权限，请更换输出目录：\n" + "\n".join(unwritable),
+            )
+            return
         missing = self._check_tools(jobs)
         if missing:
             messagebox.showwarning("缺少工具", "缺少以下工具，无法开始：\n" + "\n".join(missing))

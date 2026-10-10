@@ -56,6 +56,13 @@ def test_conflict_combo_present(root, tmp_path, monkeypatch):
     assert list(mw.progress.conflict_combo["values"]) == ["自动重命名", "覆盖", "跳过"]
 
 
+def test_dir_writable_probe(root, tmp_path, monkeypatch):
+    from app.gui.main_window import _dir_writable
+
+    assert _dir_writable(str(tmp_path)) is True
+    assert _dir_writable(str(tmp_path / "不存在")) is False
+
+
 def test_effective_output_without_outdir(root, tmp_path, monkeypatch):
     mw = _make_window(root, tmp_path, monkeypatch)
     from app.engine.models import ConversionJob
