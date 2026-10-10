@@ -291,3 +291,75 @@ def test_document_pdf_to_txt(tmp_path):
     text = Path(job.final_path).read_text(encoding="utf-8")
     assert "FormatFactory" in text
     assert "second page" in text
+
+
+def _make_table_pdf(tmp_path):
+    import fitz
+
+    out = tmp_path / "table.pdf"
+    doc = fitz.open()
+    page = doc.new_page(width=400, height=300)
+    # 2x2 表格：外框 + 内线 + 单元格文本
+    for x in (80, 180, 280):
+        page.draw_line((x, 80), (x, 200), color=(0, 0, 0), width=1)
+    for y in (80, 140, 200):
+        page.draw_line((80, y), (280, y), color=(0, 0, 0), width=1)
+    page.insert_text((100, 120), "Name")
+    page.insert_text((200, 120), "Value")
+    page.insert_text((100, 180), "Apple")
+    page.insert_text((200, 180), "42")
+    doc.save(str(out))
+    doc.close()
+    return out
+
+
+def test_document_pdf_to_xlsx(tmp_path):
+    src = _make_table_pdf(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "xlsx")
+    assert summary.done == 1
+    out = Path(job.final_path)
+    assert out.exists() and out.stat().st_size > 500
+    from openpyxl import load_workbook
+
+    wb = load_workbook(out)
+    sheets = wb.sheetnames
+    assert len(sheets) >= 1
+    all_text = " ".join(
+        str(c.value) for ws in wb.worksheets for row in ws.iter_rows() for c in row if c.value
+    )
+    assert "Apple" in all_text
+
+
+def test_document_pdf_to_pptx(tmp_path):
+    src = _make_pdf(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "pptx")
+    assert summary.done == 1
+    out = Path(job.final_path)
+    assert out.exists() and out.stat().st_size > 500
+    from pptx import Presentation
+
+    prs = Presentation(str(out))
+    assert len(prs.slides) == 2  # PDF 两页 → 两张幻灯片
+    for slide in prs.slides:
+        pics = [s for s in slide.shapes if s.shape_type == 13]  # PICTURE
+        assert len(pics) == 1
+
+
+def test_document_scanned_pdf_ocr(tmp_path):
+    # 构造扫描件：文本 PDF 渲染成图片，再把图片包成无文本层的 PDF
+    src = _make_pdf(tmp_path)
+    import fitz
+
+    text_doc = fitz.open(str(src))
+    pix = text_doc[0].get_pixmap(dpi=150)
+    text_doc.close()
+    scanned = tmp_path / "scanned.pdf"
+    out_doc = fitz.open()
+    img_page = out_doc.new_page(width=pix.width, height=pix.height)
+    img_page.insert_image(img_page.rect, pixmap=pix)
+    out_doc.save(str(scanned))
+    out_doc.close()
+    summary, job = _convert_doc(scanned, tmp_path, "txt")
+    assert summary.done == 1
+    text = Path(job.final_path).read_text(encoding="utf-8")
+    assert "FormatFactory" in text  # OCR 识别出渲染的文字

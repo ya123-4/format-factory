@@ -20,13 +20,14 @@ def test_doc_matrix_supported():
     # PDF 源（PyMuPDF/pdf2docx 引擎）
     assert doc_supported("pdf", "docx") is True
     assert doc_supported("pdf", "txt") is True
+    assert doc_supported("pdf", "xlsx") is True
+    assert doc_supported("pdf", "pptx") is True
     # 矩阵外（Kit 实测不支持）
     assert doc_supported("txt", "pdf") is False
     assert doc_supported("docx", "xlsx") is False
     assert doc_supported("pptx", "txt") is False
     assert doc_supported("xlsx", "txt") is False
     assert doc_supported("docx", "csv") is False
-    assert doc_supported("pdf", "xlsx") is False
     assert doc_supported("pdf", "odt") is False
 
 

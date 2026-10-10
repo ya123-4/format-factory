@@ -1,4 +1,11 @@
-"""Document conversion via DSH LibreOffice Kit (spec §4.5 rev 3)."""
+"""Document conversion (spec §4.5 rev 4+).
+
+Office formats: DSH LibreOffice Kit (Node CLI).
+PDF source: in-process engines — PyMuPDF extraction, pdf2docx layout
+rebuild (fallback: minimal text-flow docx), PyMuPDF find_tables +
+openpyxl for xlsx, PyMuPDF page rendering + python-pptx for slides,
+RapidOCR for scanned pages without a text layer.
+"""
 import os
 import shutil
 import threading
@@ -7,15 +14,15 @@ from pathlib import Path
 
 from app.engine.errors import ToolMissing, UnsupportedFormat
 
-# Support matrix (spec §4.5 rev 3 + PDF extension):
+# Support matrix (spec §4.5 rev 4 + extensions):
 # - LibreOffice Kit capabilities for office formats (measured)
-# - pdf source handled in-process by PyMuPDF/pdf2docx
+# - pdf source handled in-process
 _DOC_MATRIX = {
     ("docx", "pdf"), ("docx", "docx"), ("docx", "odt"), ("docx", "txt"),
     ("odt", "pdf"), ("odt", "docx"), ("odt", "odt"), ("odt", "txt"),
     ("xlsx", "pdf"), ("xlsx", "xlsx"), ("xlsx", "csv"),
     ("pptx", "pdf"), ("pptx", "pptx"),
-    ("pdf", "docx"), ("pdf", "txt"),
+    ("pdf", "docx"), ("pdf", "txt"), ("pdf", "xlsx"), ("pdf", "pptx"),
 }
 
 
@@ -66,8 +73,16 @@ def _write_minimal_docx(paragraphs: list[str], path: str) -> None:
         z.writestr("word/_rels/document.xml.rels", doc_rels)
 
 
+def _fitz():
+    try:
+        import fitz  # PyMuPDF
+    except ImportError as e:
+        raise ToolMissing("PDF 转换组件缺失（PyMuPDF 未安装）") from e
+    return fitz
+
+
 class DocConverter:
-    """Single-instance document converter backed by LibreOffice Kit."""
+    """Single-instance document converter (Kit backend + in-process PDF engines)."""
 
     _lock = threading.Lock()
 
@@ -76,7 +91,8 @@ class DocConverter:
         self._cli = cli_path
         self._stop = stop_event
 
-    def convert(self, job) -> None:
+    def convert(self, job) -> str | None:
+        """Returns a note for the log (OCR/degrade), or None."""
         src_ext = Path(job.src_path).suffix.lower().lstrip(".")
         tgt_ext = job.target_fmt.lower()
         if not doc_supported(src_ext, tgt_ext):
@@ -103,41 +119,133 @@ class DocConverter:
                 os.replace(str(tmp_out), job.final_path)
             finally:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
+        return None
 
-    def _convert_pdf(self, job, tgt_ext: str) -> None:
-        """In-process PDF conversion: PyMuPDF text extraction, python-docx writer."""
-        try:
-            import fitz  # PyMuPDF
-        except ImportError as e:
-            raise ToolMissing("PDF 转换组件缺失（PyMuPDF 未安装）") from e
+    # ---------- PDF source engines ----------
+
+    def _convert_pdf(self, job, tgt_ext: str) -> str | None:
+        _fitz()
+        tmp_dir = Path(job.final_path).parent / f".pdf-tmp-{uuid.uuid4().hex}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         part = f"{job.final_path}.part.{uuid.uuid4().hex}{Path(job.final_path).suffix}"
         try:
+            note = None
             if tgt_ext == "txt":
-                doc = fitz.open(job.src_path)
-                try:
-                    text = "\n\n".join(page.get_text() for page in doc)
-                finally:
-                    doc.close()
+                text, note = self._extract_text(job.src_path, tmp_dir)
                 Path(part).write_text(text, encoding="utf-8")
-            else:  # docx：文本流还原（段落级，最小 OOXML，Word/WPS 可打开）
-                src = fitz.open(job.src_path)
-                try:
-                    paragraphs = []
-                    for page in src:
-                        blocks = sorted(
-                            (b for b in page.get_text("blocks") if str(b[4]).strip()),
-                            key=lambda b: (round(b[1], 1), b[0]),
-                        )
-                        paragraphs.extend(str(b[4]).strip() for b in blocks)
-                    _write_minimal_docx(paragraphs, part)
-                finally:
-                    src.close()
+            elif tgt_ext == "docx":
+                note = self._pdf_to_docx(job.src_path, part, tmp_dir)
+            elif tgt_ext == "xlsx":
+                self._pdf_to_xlsx(job.src_path, part)
+            elif tgt_ext == "pptx":
+                self._pdf_to_pptx(job.src_path, part, tmp_dir)
             if not Path(part).exists():
                 raise UnsupportedFormat(f"pdf converter did not produce {Path(part).name}")
             os.replace(part, job.final_path)
+            return note
         except BaseException:
             try:
                 os.unlink(part)
             except OSError:
                 pass
             raise
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _extract_text(self, src: str, tmp_dir: Path) -> tuple[str, str | None]:
+        """Text layer if present, else render pages and OCR. Returns (text, note)."""
+        from app.engine.ocr import ocr_image, pdf_has_text_layer
+
+        fitz = _fitz()
+        if pdf_has_text_layer(src):
+            doc = fitz.open(src)
+            try:
+                return "\n\n".join(page.get_text() for page in doc), None
+            finally:
+                doc.close()
+        doc = fitz.open(src)
+        try:
+            chunks = []
+            for i, page in enumerate(doc):
+                png = tmp_dir / f"page-{i}.png"
+                page.get_pixmap(dpi=200).save(str(png))
+                chunks.append(ocr_image(str(png)))
+            return "\n\n".join(chunks), "已启用 OCR 识别（源 PDF 无文本层）"
+        finally:
+            doc.close()
+
+    def _pdf_to_docx(self, src: str, part: str, tmp_dir: Path) -> str | None:
+        """pdf2docx layout rebuild; fallback to text-flow minimal docx."""
+        try:
+            from pdf2docx import Converter as Pdf2Docx
+        except ImportError:
+            text, note = self._extract_text(src, tmp_dir)
+            paragraphs = [p for p in text.split("\n\n") if p.strip()]
+            _write_minimal_docx(paragraphs, part)
+            return "；".join(
+                n for n in (note, "已降级文本流还原（pdf2docx 未安装，不重建版式）") if n
+            )
+        cv = Pdf2Docx(src)
+        try:
+            cv.convert(part)
+        finally:
+            cv.close()
+        return None
+
+    def _pdf_to_xlsx(self, src: str, part: str) -> None:
+        """PyMuPDF find_tables -> openpyxl workbook (one sheet per table)."""
+        try:
+            from openpyxl import Workbook
+        except ImportError as e:
+            raise ToolMissing("xlsx 导出组件缺失（openpyxl 未安装）") from e
+        fitz = _fitz()
+        doc = fitz.open(src)
+        try:
+            wb = Workbook()
+            wb.remove(wb.active)
+            found = False
+            for pno, page in enumerate(doc):
+                tables = page.find_tables()
+                if not tables or not tables.tables:
+                    continue
+                for tno, table in enumerate(tables.tables):
+                    found = True
+                    title = f"P{pno + 1}-T{tno + 1}"
+                    ws = wb.create_sheet(title=title)
+                    for row in table.extract():
+                        ws.append([None if v is None else str(v) for v in row])
+            if not found:
+                raise UnsupportedFormat("PDF 中未检测到表格，无法转换为 xlsx")
+            wb.save(part)
+        finally:
+            doc.close()
+
+    def _pdf_to_pptx(self, src: str, part: str, tmp_dir: Path) -> None:
+        """Render each page as a full-bleed picture slide (layout-faithful)."""
+        try:
+            from pptx import Presentation
+        except ImportError as e:
+            raise ToolMissing("pptx 导出组件缺失（python-pptx 未安装）") from e
+        fitz = _fitz()
+        doc = fitz.open(src)
+        try:
+            prs = Presentation()
+            sw, sh = prs.slide_width, prs.slide_height
+            blank = prs.slide_layouts[6]
+            for i, page in enumerate(doc):
+                png = tmp_dir / f"page-{i}.png"
+                page.get_pixmap(dpi=150).save(str(png))
+                pw, ph = page.rect.width, page.rect.height
+                scale = min(sw / pw, sh / ph)
+                pic_w, pic_h = int(pw * scale), int(ph * scale)
+                slide = prs.slides.add_slide(blank)
+                slide.shapes.add_picture(
+                    str(png),
+                    (sw - pic_w) // 2,
+                    (sh - pic_h) // 2,
+                    width=pic_w,
+                    height=pic_h,
+                )
+            prs.save(part)
+        finally:
+            doc.close()

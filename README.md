@@ -15,18 +15,22 @@ Windows 桌面多格式转换器：视频 / 音频 / 图片 / 文档互转，支
 | 图片 | jpg / png / webp / bmp / tiff |
 | 文档 | pdf / docx / odt / txt / xlsx / csv / pptx（按矩阵过滤，见下） |
 
-**文档转换矩阵**（rev 4：Office 格式走 LibreOffice Kit，PDF 源走进程内 PyMuPDF/pdf2docx 引擎）：
+**文档转换矩阵**（rev 5：Office 格式走 LibreOffice Kit，PDF 源走进程内引擎群）：
 
 | 源 ↓ \ 目标 → | pdf | docx | odt | txt | xlsx | csv | pptx |
 |---|---|---|---|---|---|---|---|
-| pdf | ✗ | ✓ | ✗ | ✓ | ✗ | ✗ | ✗ |
+| pdf | ✗ | ✓ | ✗ | ✓ | ✓ | ✗ | ✓ |
 | docx | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | odt | ✓ | ✓ | ✓ | ✓ | ✗ | ✗ | ✗ |
 | xlsx | ✓ | ✗ | ✗ | ✗ | ✓ | ✓ | ✗ |
 | pptx | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✓ |
 
+- **PDF 源四种能力**：
+  - `pdf → docx`：pdf2docx **版式重建**（表格/图片/布局还原，可编辑）；组件缺失时自动降级文本流还原。
+  - `pdf → txt`：文本层提取；**扫描件（无文本层）自动 OCR**（RapidOCR，中文可用），日志会提示「已启用 OCR 识别」。
+  - `pdf → xlsx`：自动检测表格（每个表格一个 sheet）；无表格的 PDF 会报「未检测到表格」。
+  - `pdf → pptx`：每页渲染为高清图片幻灯片（版式 100% 保真，文字不可编辑）。
 - `xlsx → csv` 即原设计的 CSV 导出语义（逗号分隔文本）。
-- `pdf → docx` 为文本流还原（逐段提取原文，Word/WPS 可打开编辑；复杂表格/版式不重建），`pdf → txt` 为纯文本提取。两者不需要任何外部工具。
 - `txt` 文件作为转换**源**暂不支持（本机 LibreOffice Kit 无此输入能力）；安装传统 LibreOffice 后可在 `config.json` 的 `soffice_path` 配置扩展。
 - `.vdat`：自动探测文件头，支持两类：
   1. **MP4 变体**（行车记录仪常见）：直接按视频转换，目标格式建议 mp4；
