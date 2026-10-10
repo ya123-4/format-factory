@@ -394,3 +394,72 @@ def test_document_scanned_pdf_ocr(tmp_path):
     assert summary.done == 1
     text = Path(job.final_path).read_text(encoding="utf-8")
     assert "FormatFactory" in text  # OCR 识别出渲染的文字
+
+
+def _make_pdf_with_image(tmp_path):
+    import fitz
+
+    out = tmp_path / "with-image.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text((72, 72), "text before image")
+    # 用 lavfi 生成的图片数据？直接画一个彩色矩形并渲染成图再插入
+    img_pdf = fitz.open()
+    img_page = img_pdf.new_page(width=120, height=80)
+    img_page.draw_rect(img_page.rect, color=(0.9, 0.3, 0.2), fill=(0.9, 0.3, 0.2))
+    pix = img_page.get_pixmap(dpi=100)
+    img_pdf.close()
+    page.insert_image(fitz.Rect(72, 140, 272, 240), pixmap=pix)
+    page.insert_text((72, 280), "text after image")
+    doc.save(str(out))
+    doc.close()
+    return out
+
+
+def test_document_pdf_with_image_keeps_image(tmp_path):
+    src = _make_pdf_with_image(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "docx")
+    assert summary.done == 1
+    out = Path(job.final_path)
+    assert out.exists()
+    import zipfile
+
+    with zipfile.ZipFile(out) as z:
+        media = [n for n in z.namelist() if n.startswith("word/media/")]
+        assert len(media) >= 1  # PDF 里的图片必须出现在 docx 中
+        for m in media:
+            data = z.read(m)
+            assert len(data) > 100
+            assert data[:8] == b"\x89PNG\r\n\x1a\n"  # 有效 PNG
+
+
+def test_pdf_to_docx_image_backfill_when_converter_drops_images(tmp_path, monkeypatch):
+    """pdf2docx 丢图时，引擎必须把 PDF 图片补插进 docx（计数防御）。"""
+    import sys
+    import types
+
+    class FakeConverter:
+        def __init__(self, src):
+            self.src = src
+
+        def convert(self, out):
+            # 模拟丢图：写一个无 media 的最小 docx
+            from app.engine.document import _write_minimal_docx
+
+            _write_minimal_docx(["text only, image dropped"], out)
+
+        def close(self):
+            pass
+
+    fake_mod = types.ModuleType("pdf2docx")
+    fake_mod.Converter = FakeConverter
+    monkeypatch.setitem(sys.modules, "pdf2docx", fake_mod)
+
+    src = _make_pdf_with_image(tmp_path)
+    summary, job = _convert_doc(src, tmp_path, "docx")
+    assert summary.done == 1
+    import zipfile
+
+    with zipfile.ZipFile(Path(job.final_path)) as z:
+        media = [n for n in z.namelist() if n.startswith("word/media/")]
+        assert len(media) >= 1  # 补丁已把图片补回 docx

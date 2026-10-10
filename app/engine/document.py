@@ -81,6 +81,36 @@ def _fitz():
     return fitz
 
 
+def _count_docx_media(docx_path: str) -> int:
+    import zipfile
+
+    with zipfile.ZipFile(docx_path) as z:
+        return len([n for n in z.namelist() if n.startswith("word/media/")])
+
+
+def _pdf_images_missing_from_docx(src: str, docx_path: str) -> list:
+    """When the docx has fewer images than the PDF, return every PDF image
+    (duplicating beats dropping)."""
+    import fitz
+
+    doc = fitz.open(src)
+    try:
+        images = []
+        for pno, page in enumerate(doc):
+            for img in page.get_images(full=True):
+                xref = img[0]
+                info = doc.extract_image(xref)
+                info["page"] = pno + 1
+                images.append((xref, info, info["image"]))
+    finally:
+        doc.close()
+    if not images:
+        return []
+    if len(images) > _count_docx_media(docx_path):
+        return images
+    return []
+
+
 class DocConverter:
     """Single-instance document converter (Kit backend + in-process PDF engines)."""
 
@@ -175,7 +205,12 @@ class DocConverter:
             doc.close()
 
     def _pdf_to_docx(self, src: str, part: str, tmp_dir: Path) -> str | None:
-        """pdf2docx layout rebuild; fallback to text-flow minimal docx."""
+        """pdf2docx layout rebuild; fallback to text-flow minimal docx.
+
+        Image safeguard: if the produced docx contains fewer images than the
+        source PDF (pdf2docx skips some image encodings), extract them with
+        PyMuPDF and append to the document end.
+        """
         try:
             from pdf2docx import Converter as Pdf2Docx
         except ImportError:
@@ -190,7 +225,28 @@ class DocConverter:
             cv.convert(part)
         finally:
             cv.close()
+        missing = _pdf_images_missing_from_docx(src, part)
+        if missing:
+            self._append_images(part, tmp_dir, missing)
+            return f"已补插 {len(missing)} 张图片（pdf2docx 未导出，已追加到文末）"
         return None
+
+    def _append_images(self, docx_path: str, tmp_dir: Path, images: list) -> None:
+        """Append extracted PDF images to the end of the docx."""
+        try:
+            from docx import Document
+            from docx.shared import Inches
+        except ImportError as e:
+            raise ToolMissing("docx 补图组件缺失（python-docx 未安装）") from e
+        d = Document(docx_path)
+        d.add_paragraph("── 以下为原 PDF 图片（自动补插）──")
+        for idx, (xref, info, data) in enumerate(images):
+            ext = info["ext"] if info["ext"] in ("png", "jpg", "jpeg") else "png"
+            img_path = tmp_dir / f"backfill-{idx}.{ext}"
+            img_path.write_bytes(data)
+            d.add_picture(str(img_path), width=Inches(5.5))
+            d.add_paragraph(f"[第 {info.get('page', '?')} 页图片]")
+        d.save(docx_path)
 
     def _pdf_to_xlsx(self, src: str, part: str) -> None:
         """PyMuPDF find_tables -> openpyxl workbook (one sheet per table)."""
