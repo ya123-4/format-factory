@@ -1,5 +1,6 @@
 # 格式工厂 exe 打包脚本（可重复执行）
 # 用法：在本目录运行 powershell -ExecutionPolicy Bypass -File .pytest-bootstrap\build_exe.ps1
+# 产物：dist\FormatFactory\ 目录（onedir 模式，启动不写 TEMP，火绒友好）+ dist\FormatFactory-v1.0.0.zip
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
@@ -12,7 +13,7 @@ New-Item -ItemType Directory -Force $env:TMP, $env:LOCALAPPDATA | Out-Null
 $env:PYTHONPATH = "$root\.pytest-libs"
 
 python -m PyInstaller `
-  --noconfirm --clean --onefile --windowed `
+  --noconfirm --clean --onedir --windowed `
   --name "FormatFactory" `
   --paths "libs" `
   --collect-all "rapidocr_onnxruntime" `
@@ -31,5 +32,11 @@ python -m PyInstaller `
   --add-data "tools/ffmpeg;tools/ffmpeg" `
   app/main.py
 
-Write-Host "BUILD DONE -> dist\FormatFactory.exe"
-Get-Item "dist\FormatFactory.exe" | Select-Object Name, @{n="SizeMB";e={[math]::Round($_.Length/1MB,1)}}
+Write-Host "BUILD DONE -> dist\FormatFactory\FormatFactory.exe"
+
+# 打包 zip（便于分发/上传 Release）
+$zip = "$root\dist\FormatFactory-v1.0.0.zip"
+if (Test-Path $zip) { Remove-Item $zip -Force }
+Compress-Archive -Path "$root\dist\FormatFactory\*" -DestinationPath $zip
+Write-Host "ZIP DONE -> $zip"
+Get-Item $zip | Select-Object Name, @{n="SizeMB";e={[math]::Round($_.Length/1MB,1)}}
