@@ -101,21 +101,40 @@ def run_tool(cmd: list[str], cwd: str, stop_event=None) -> ToolResult:
     return ToolResult(rc, tail)
 
 
+def _tmp_work_dir() -> str:
+    """System temp staging dir for tool outputs.
+
+    Some AV/security products deny unknown exes (like the bundled ffmpeg)
+    from writing into user folders; writing to the temp area and letting
+    Python move the result sidesteps those blocks.
+    """
+    import tempfile
+
+    base = os.environ.get("TEMP") or os.environ.get("TMP") or tempfile.gettempdir()
+    d = os.path.join(base, "format-factory-tmp")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def atomic_output(cmd: list[str], dst: str, stop_event) -> None:
-    """Run with a .part.<uuid4> temp output, atomically replace on success.
+    """Run the tool with its output staged in the system temp dir, then move
+    the result into place (cross-drive move = copy + delete).
 
     The temp name keeps the target extension so tools that pick the muxer
     from the file extension (ffmpeg) still work. dst is absolutized: a
     relative dst combined with a relative cwd would be resolved twice and
     produce a non-existent directory.
     """
+    import shutil
+
     dst = os.path.abspath(dst)
     suffix = os.path.splitext(dst)[1]
-    part = f"{dst}.part.{uuid.uuid4().hex}{suffix}"
+    work = _tmp_work_dir()
+    part = os.path.join(work, f"{uuid.uuid4().hex}{suffix}")
     part_cmd = cmd[:-1] + [part]
     try:
-        run_tool(part_cmd, os.path.dirname(dst) or ".", stop_event=stop_event)
-        os.replace(part, dst)
+        run_tool(part_cmd, work, stop_event=stop_event)
+        shutil.move(part, dst)
     except BaseException:
         try:
             os.unlink(part)

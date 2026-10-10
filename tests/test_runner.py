@@ -138,7 +138,6 @@ def test_atomic_output_part_keeps_extension(tmp_path, monkeypatch):
     runner.atomic_output(["ff.exe", "-i", "a", str(dst)], str(dst), None)
     part = calls[0][-1]
     assert part.endswith(".mkv"), f"part must keep extension for muxer detection: {part}"
-    assert ".part." in part
 
 
 def test_atomic_output_absolutizes_relative_dst(tmp_path, monkeypatch):
@@ -157,3 +156,24 @@ def test_atomic_output_absolutizes_relative_dst(tmp_path, monkeypatch):
     cmd, cwd = calls[0]
     assert os.path.isabs(cmd[-1])
     assert os.path.isabs(cwd)
+
+
+def test_atomic_output_stages_in_temp_dir(tmp_path, monkeypatch):
+    """工具输出先写系统 TEMP 暂存（绕开杀软对未知 exe 写用户目录的拦截），再移动到目标。"""
+    import os
+
+    fake_temp = tmp_path / "fake-temp"
+    fake_temp.mkdir()
+    monkeypatch.setenv("TEMP", str(fake_temp))
+    calls = []
+
+    def fake_run_tool(cmd, cwd, stop_event=None):
+        calls.append((cmd, cwd))
+        open(cmd[-1], "w").write("done")
+
+    monkeypatch.setattr(runner, "run_tool", fake_run_tool)
+    dst = tmp_path / "out.mp4"
+    runner.atomic_output(["ff.exe", "-i", "a", str(dst)], str(dst), None)
+    cmd, cwd = calls[0]
+    assert str(fake_temp) in cmd[-1]  # 输出暂存在 TEMP
+    assert dst.read_text() == "done"  # 已移动到目标
