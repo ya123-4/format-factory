@@ -7,7 +7,7 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from app.engine.errors import ConversionFailed, DiskFull
+from app.engine.errors import ConversionFailed, DiskFull, PermissionDenied
 
 STDERR_TAIL_LINES = 20
 _DISK_FULL_MARKERS = (
@@ -16,6 +16,12 @@ _DISK_FULL_MARKERS = (
     "not enough space",
     "磁盘空间不足",
     "空间不足",
+)
+_PERMISSION_MARKERS = (
+    "permission denied",
+    "access is denied",
+    "拒绝访问",
+    "没有权限",
 )
 
 
@@ -37,6 +43,10 @@ def _classify_failure(tail: str, exit_code: int) -> ConversionError:
     low = tail.lower()
     if any(m in low for m in _DISK_FULL_MARKERS):
         return DiskFull(f"tool reported disk-full: {tail}")
+    if any(m in low for m in _PERMISSION_MARKERS):
+        return PermissionDenied(
+            f"输出路径无写入权限：{tail}（建议更换输出目录，或确认目标磁盘可写）"
+        )
     return ConversionFailed(f"tool exited with code {exit_code}", exit_code, tail)
 
 

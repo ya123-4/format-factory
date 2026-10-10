@@ -54,6 +54,18 @@ def test_disk_full_classified(monkeypatch):
         runner.run_tool(["ff.exe", "a", "b"], cwd="cwd")
 
 
+def test_permission_denied_classified(monkeypatch):
+    from app.engine.errors import PermissionDenied
+
+    fake = _FakeProc(
+        returncode=1,
+        stderr_lines=["C:/Users/x/Desktop/out.mp4.part.abc.mp4: Permission denied"],
+    )
+    _patch_popen(monkeypatch, fake)
+    with pytest.raises(PermissionDenied):
+        runner.run_tool(["ff.exe", "a", "b"], cwd="cwd")
+
+
 def test_disk_full_chinese_message_classified(monkeypatch):
     fake = _FakeProc(returncode=1, stderr_lines=["磁盘空间不足"])
     _patch_popen(monkeypatch, fake)
