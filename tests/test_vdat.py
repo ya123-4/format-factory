@@ -22,7 +22,18 @@ def test_mp4_variant_routes_to_video(tmp_path):
 def test_hls_playlist_routes_to_video(tmp_path):
     p = tmp_path / "rec.vdat"
     p.write_bytes(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nrec.vdat_contents/0\n")
+    (tmp_path / "rec.vdat_contents").mkdir()
     assert route_vdat(str(p), _FakeProber()) == InputKind.VIDEO
+
+
+def test_hls_playlist_missing_segments_dir_raises(tmp_path):
+    from app.engine.errors import FileNotFound
+
+    p = tmp_path / "rec.vdat"
+    p.write_bytes(b"#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:1.0,\nrec.vdat_contents/0\n")
+    with pytest.raises(FileNotFound) as ei:
+        route_vdat(str(p), _FakeProber())
+    assert "contents" in str(ei.value) or "分片" in str(ei.value)
 
 
 def test_unknown_vdat_raises_unsupported_with_hex(tmp_path):
