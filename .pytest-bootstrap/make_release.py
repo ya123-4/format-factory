@@ -54,7 +54,9 @@ def api(path, method="GET", body=None, headers=None):
     if headers:
         h.update(headers)
     req = urllib.request.Request(
-        f"https://api.github.com{path}", method=method, headers=h
+        path if path.startswith("http") else f"https://api.github.com{path}",
+        method=method,
+        headers=h,
     )
     if body is not None:
         if isinstance(body, (dict, list)):
