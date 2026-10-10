@@ -111,5 +111,10 @@ class FfmpegTextProber:
         )
         meta = parse_ffmpeg_text(r.stderr or "")
         if meta is None:
-            raise InputCorrupt(f"ffmpeg could not read streams from {path}")
+            detail = ""
+            stderr = (r.stderr or "").strip()
+            if stderr:
+                lines = stderr.splitlines()
+                detail = "；" + " | ".join(l.strip() for l in lines[-4:] if l.strip())
+            raise InputCorrupt(f"ffmpeg 无法读取 {path} 的媒体流{detail}")
         return meta
